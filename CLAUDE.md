@@ -345,6 +345,44 @@ immediately, so this is timing-dependent and will not reproduce reliably. A
 dashboard that syncs right after linking and renders the result will show an
 empty account and look broken. Re-sync before concluding an Item has no data.
 
+## Billing model, and which commands cost money
+
+**Plaid publishes no price list.** Their billing doc says so directly: "A price
+list is not available in the documentation." Rates appear only on the last page
+of the Production access request flow, and otherwise come from sales. Do not go
+looking for a public pricing page; there isn't one.
+
+**The Trial plan is perpetually free with no expiration**, bounded only by the
+10-Item limit. So at the current scale this project costs nothing, and the
+opacity is irrelevant until an 11th Item is needed.
+
+It stops being irrelevant on a paid plan, because **product choice at link time
+decides the billing shape for the life of the Item**, and products are fixed at
+link time:
+
+| model | products | implication |
+|---|---|---|
+| **Subscription, monthly per Item** | Transactions, Recurring Transactions, **Liabilities**, Investments | recurring cost per linked Item |
+| **One-time per Item** | Auth, Identity, Income, Layer | paid once at link |
+| **Per-request flat fee** | **Balance**, Signal, **refresh endpoints**, Identity Match | every call costs |
+
+Consequences for this code, on a paid plan:
+
+- The live Capital One Item carries **two** subscription products
+  (`transactions`, `liabilities`) and so bills monthly twice over. Liabilities
+  earns its place only if statement and payment-due data is actually used;
+  otherwise it is a recurring charge for nothing. Dropping it means re-linking,
+  which spends an Item slot.
+- **`balances` is a per-request charge.** `accounts` is not — it returns cached
+  balances from the Item. A dashboard should call `accounts` by default and
+  `balances` only when the user explicitly asks for a fresh pull. Do not put
+  `balances` on an auto-refresh.
+- **`refresh` is a per-request charge** and was used freely during the
+  Sandbox and investigation phases. Treat it as a deliberate user action, never
+  something a dashboard does on load.
+- Omitting `auth` avoided a one-time fee as well as the ACH-number exposure.
+  The security argument and the cost argument point the same way.
+
 ## The Item budget — 10, and removal does not refund
 
 **The Production free trial allows 10 Items, and `/item/remove` does NOT free
