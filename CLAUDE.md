@@ -223,6 +223,57 @@ The general lesson: **annual consent expiry is the norm, not the exception.**
 Any personal-finance app that intends to keep running needs update mode, and
 `consent_expiration_time` on `/item/get` is the field that tells it when.
 
+## Where this is going (set by the user 2026-08-15)
+
+Two consumers, both **on-demand**. Nothing runs unattended:
+
+1. **A local dashboard** the user opens.
+2. **An MCP wrapper**, following `kalshi_mcp` / `schwab_mcp` — drive the data
+   conversationally through Claude Code.
+
+Origin: the user was getting good results dumping CSV exports into Claude chat
+to build a personal budget and accounts spreadsheet, and wants the programmatic
+version of that. The context of that chat is to be supplied when the budget
+layer is actually built — **ask for it before designing that layer**, rather
+than inventing a category scheme.
+
+Do not assume scheduled or background operation. It has not been asked for, and
+an earlier session asserted it unprompted and reasoned from it. Consequences of
+it being on-demand:
+
+- **Webhooks are worth nothing right now.** There is no always-on receiver and
+  nothing to deliver to. `fire-webhook` stays as a Sandbox toy. Don't propose a
+  webhook architecture.
+- **Update mode does not need automating.** "Run this when it breaks" is
+  sufficient, because a human is present at every call. It still has to
+  *exist* — see the Capital One 12-month consent refresh.
+- **The Schwab MCP may be the permanent Schwab path.** Its 7-day refresh token
+  is a real cost only under unattended operation; when the user is already
+  sitting there, re-login is free. Do not argue for routing Schwab through
+  Plaid on maintenance grounds.
+
+## The storage decision, which the sync model forces
+
+**`/transactions/sync` is a change feed, and `cmd_transactions` currently
+discards what it consumes.** It prints the deltas and advances the cursor, so
+the data is unreachable on the next call without `--reset`. Already observable:
+item 1 returned 48 transactions, then 0. A dashboard built on the current code
+would open and show nothing.
+
+So a local store is not a preference, it is required by the endpoint's
+semantics. It is also where everything Plaid does not know about has to live:
+budget categories, recategorizations, splits, notes, targets. Plaid's
+`personal_finance_category` is a model output carrying a `confidence_level`
+(the sandbox Uber row reads `LOW`) — it is a starting point to override, not
+ground truth.
+
+**The local store is the unification point, not Plaid's wire format.** Schwab
+data from the MCP adapts into the same tables rather than being bent into
+Plaid's response shape. This replaces an earlier suggestion in conversation
+that aggregation should target the Plaid schema.
+
+Nothing here is built yet. `store.py` persists Items and cursors only.
+
 ## Posture
 
 Sandbox only, and read-mostly. The write-ish endpoints wrapped so far are
