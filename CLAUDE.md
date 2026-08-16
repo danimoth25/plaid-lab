@@ -507,6 +507,101 @@ sync omitted the Savor card while still returning its transactions. Build
 account lists from `/accounts/get`. `cmd_history` did this wrong once and
 under-summed its own table.
 
+## Division of labor — set by the user 2026-08-16
+
+**Plaid's job is "replace export and parse". That is all it was ever meant to
+do.** No more downloading monthly CSVs, no more PayPal PDF parser.
+
+**Categorization is the LLM's job, through the MCP wrapper.** That is a
+deliberate reason the MCP is in scope, not an afterthought: the user is already
+paying for a model that is good at this, so a hand-built classifier is not the
+goal and should not be proposed as one.
+
+An earlier session twice inflated the stated goal — assuming unattended cron
+operation, then assuming Plaid should replace categorization. Neither was ever
+asked for. **Take the stated scope literally.**
+
+The refinement that follows, and the reason the store still matters: an LLM
+categorizing fresh each month is *inconsistent*, not wrong. `full_merge.py`'s
+keyword cascade is best read as a **record of decisions already made**, not as a
+classifier to rebuild.
+
+**Precedent has two shapes, and conflating them is the mistake to avoid**
+(user's point, 2026-08-16). Merchant → category is not a function for every
+merchant:
+
+- **Deterministic** — `ROCKET MORTGAGE` → Mortgage, `LENDINGCLUB` → Debt,
+  `HCTRA` → Auto - Tolls. One merchant, one answer, always. Record and apply.
+- **Ambiguous** — Humble Bundle sells games, books and software; Amazon and
+  Walmart sell anything. The right precedent is *not* a fixed category. It is
+  "this merchant is ambiguous: assign a generic bucket, flag it, and ask what it
+  was." The user's phrasing: "put in a generic category and ask later if it was
+  games or books or general software."
+
+The whole Amazon item-by-item list in `MANUAL_NOTES_AND_DESCRIPTIONS.md` exists
+because Amazon is the extreme case of the second kind, and the Walmart 6/26
+split is the same problem inside a single charge. So the store must be able to
+record *ambiguity* and a pending question, not only a resolved category.
+
+**This design is explicitly deferred.** Per the user: work out the precedent
+model after the Plaid pipeline is up and running, not before. Do not build a
+rules engine ahead of the data flowing.
+
+## Next steps (as of 2026-08-16, end of session)
+
+In order. Nothing here is started.
+
+1. **Rebuild the master transaction dataset with descriptions carried through.**
+   `data/all_spend_transactions.csv` is `Date,Category,Amount,Month,Source` — no
+   merchant or description. That makes it unjoinable to Plaid, whose match key
+   is `merchant_name` / `merchant_entity_id`. The raw statements in
+   `provided_files/` still have descriptions, so this is a rebuild, not a
+   recovery. Do this before designing any schema.
+2. **Reconcile `full_merge.py` against `group_map.py`.** The cascade reflects an
+   older taxonomy and cannot reproduce the current master CSV as written:
+   - returns `Phone Bill`; taxonomy has `Phone & Internet`
+   - returns `Video/Tabletop Gaming`; taxonomy splits `Video Games` /
+     `Tabletop Gaming`, and that split was decided per merchant
+   - returns `Hobby - Art`, which is **not in `group_map.py` at all**
+3. **Design the local store**, schema falling out of the rules rather than the
+   reverse. It must hold the decision record from the section above, and it is
+   required regardless: `/transactions/sync` is a change feed and
+   `cmd_transactions` currently discards what it consumes.
+4. **Build the MCP wrapper** (`plaid_mcp`, following `kalshi_mcp` /
+   `schwab_mcp`). This is where categorization actually happens.
+5. **Import the historical CSV** covering 2026-01-01 to ~2026-05-21, since
+   Capital One only serves 90 days. Note the seam is an **overlap**, not a gap —
+   the workbook runs to 2026-08-14 and Plaid starts 2026-05-21, so roughly three
+   months are described by both sources. Use the overlap to validate the
+   pipeline, then cut on a hard date so nothing is counted twice.
+6. **Consider a PayPal Item** (~71 rows, 15% of the dataset). It would retire
+   `parse_paypal4.py` and the PDF pipeline. Costs one of 8 remaining slots.
+
+Rules that must survive into the store, all of which a naive ingest gets wrong:
+
+- Savings & Investing is shown separately and **never** inside Total Spending.
+- Interest is excluded from **both** income and savings. Deliberate, reversed
+  twice, final.
+- Zelle deposits from a household member are reimbursement, **not income**.
+- PayPal "Pay in 4" repayment legs are debt paydown, **not new spending**.
+- Bank-side `PAYPAL` rows are excluded and replaced by PayPal statement detail.
+  If PayPal is ever linked through Plaid, preserve that substitution or 71
+  transactions double-count.
+- Internal transfers are netted. **Plaid returns both legs of every transfer.**
+
+## Data handling for the budget bundles
+
+The bundles carry real statements, account numbers, balances, full merchant
+history, and a household member's legal name (hardcoded in `full_merge.py` as an
+exclusion rule). **This repo is public.** They arrived untracked and unignored
+while `git add -A` was in routine use; nothing was committed, by timing alone.
+`.gitignore` now covers `*.zip`, `*.csv`, `*.pdf`, `*.xlsx`, `*.xls`, `*.ofx`,
+`*.qfx` and the `data/`, `budget/`, `provided_files/`, `statements/` directory
+names, deliberately broader than the current files require.
+
+Extract and work on these under the scratchpad, never inside the repo. Report
+structure, counts and date ranges rather than amounts, merchants or names.
+
 ## The storage decision, which the sync model forces
 
 **`/transactions/sync` is a change feed, and `cmd_transactions` currently
