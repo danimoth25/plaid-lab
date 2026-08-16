@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "plaid-lab"
+version = "0.1.0"
+description = "Plaid API client and CLI for personal finance tooling"
+requires-python = ">=3.11"
+dependencies = [
+    "plaid-python>=42.0.0",  # official client, pinned to API version 2020-09-14
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+plaid-lab = "plaid_lab.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["plaid_lab"]

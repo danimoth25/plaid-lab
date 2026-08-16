@@ -1,0 +1,25 @@
+# Virtual environment
+.venv/
+
+# Python build / cache artifacts
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
+# Secrets. .env holds the Plaid client_id and secret.
+.env
+*.env
+.env.*
+!.env.example
+
+# items.json holds access_tokens. In Production each one is a live credential
+# to a real bank account; it never goes in the repo.
+items.json
+
+# Local working notes carrying account specifics.
+*-private.md
+
+# Generated exports.
+exports/
