@@ -397,6 +397,7 @@ def cmd_hosted_link(ctx: Context) -> int:
         webhook=ctx.args.webhook,
         hosted=True,
         url_lifetime_seconds=ctx.args.lifetime,
+        transactions_days_requested=ctx.args.days_requested,
     )
     if ctx.args.json:
         print(dumps(data))
@@ -1018,6 +1019,15 @@ def build_parser() -> argparse.ArgumentParser:
     hosted.add_argument("--products", nargs="+", default=["transactions"])
     hosted.add_argument("--country", nargs="+", default=["US"])
     hosted.add_argument("--webhook")
+    hosted.add_argument(
+        "--days-requested",
+        type=int,
+        default=products.MAX_DAYS_REQUESTED,
+        help=(
+            "transaction history to request, 1-730. THIS is the setting that "
+            "governs history depth; the one on `transactions` arrives too late"
+        ),
+    )
     hosted.add_argument(
         "--lifetime", type=int, help="URL lifetime in seconds (default: Plaid's)"
     )

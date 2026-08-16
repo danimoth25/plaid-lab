@@ -286,12 +286,23 @@ current budget regimen starts there). That is ~227 days back as of
 2026-08-15 — which is *more than Plaid's 90-day default* and far less than its
 730-day maximum.
 
-- **`days_requested` applies only when an Item's transactions are initialized
-  for the first time, and cannot be widened afterwards.** An Item first synced
-  under the default is capped at 90 days for its entire life; the only remedy
-  is re-linking. `products.transactions_sync` therefore defaults to
-  `MAX_DAYS_REQUESTED = 730` rather than to Plaid's default. Do not "fix" that
-  down to 90.
+- **There are TWO `days_requested` settings and only one of them works.**
+  This cost a real Production link on 2026-08-16.
+  - `LinkTokenTransactions.days_requested`, passed to **`/link/token/create`**,
+    is the one that governs history depth. Transactions are initialized when
+    the Item is created, so this is the only moment the window can be set.
+    Wired as `hosted-link --days-requested`, default 730.
+  - `TransactionsSyncRequestOptions.days_requested`, passed to
+    **`/transactions/sync`**, arrives after initialization has already
+    happened and does nothing on an Item created through Link. It is still set
+    (default 730) because it does apply to Items whose transactions were never
+    initialized, but **do not rely on it**.
+  - Evidence: a Capital One Item linked via `hosted-link` before the link-time
+    setting existed returned **86 days** of history — the 90-day default —
+    despite its first sync requesting 730.
+- **Neither can be widened afterwards.** An Item initialized at 90 days is
+  capped at 90 for its entire life; the only remedy is re-linking, which means
+  a new Item and a new browser session.
 - Range is 1-730, enforced client-side by the library. Production applies a
   30-day floor.
 - **The Sandbox cannot validate lookback.** With 730 requested, `ins_109508`
@@ -312,6 +323,33 @@ historical update) and sync returns an empty delta rather than
 immediately, so this is timing-dependent and will not reproduce reliably. A
 dashboard that syncs right after linking and renders the result will show an
 empty account and look broken. Re-sync before concluding an Item has no data.
+
+## The live Capital One Item (linked 2026-08-16)
+
+First Production link. `liabilities,transactions` — **no `auth`**, deliberately,
+so the credential does not carry ACH routing and account numbers.
+
+- **5 accounts**: 360 Checking, 360 Performance Savings, and three credit cards
+  (Savor, VentureOne, Quicksilver).
+- **Only 3 carried transactions** in the returned window; VentureOne and
+  Quicksilver came back with zero. `accounts_get` lists all 5, so they are
+  linked — most likely simply unused in the window rather than missing.
+- **`consent_expiration_time` is 2027-08-16T03:20:03Z** — exactly 12 months,
+  confirming Capital One's annual refresh with a concrete date. `relink` is the
+  recovery path.
+- **History came back as 86 days (oldest 2026-05-21), not the 730 requested**,
+  because of the two-`days_requested` bug above.
+
+**Whether Capital One can actually serve more than ~90 days is still
+undetermined.** Two hypotheses fit the 86 days equally well: our link-time
+setting was missing (established), or Capital One caps history near 90 days
+regardless (untested). The decisive test is a fresh link with
+`hosted-link --days-requested 730` now that it is wired, and comparing the
+oldest returned date. Do not record a conclusion here until that has been run.
+
+If Capital One does cap near 90 days, the user's 2026-01-01 target is
+unreachable through Plaid and the historical CSV import becomes necessary after
+all, covering roughly January through May 2026.
 
 ## The storage decision, which the sync model forces
 

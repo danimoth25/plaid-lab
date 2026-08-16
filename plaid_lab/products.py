@@ -40,6 +40,7 @@ from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
 from plaid.model.link_token_create_request_update import LinkTokenCreateRequestUpdate
 from plaid.model.link_token_get_request import LinkTokenGetRequest
+from plaid.model.link_token_transactions import LinkTokenTransactions
 from plaid.model.products import Products
 from plaid.model.sandbox_item_fire_webhook_request import (
     SandboxItemFireWebhookRequest,
@@ -62,6 +63,9 @@ from .client import call
 # First Platypus Bank. The default Sandbox institution: supports the widest set
 # of products and needs no OAuth flow.
 DEFAULT_INSTITUTION = "ins_109508"
+
+#: Plaid's ceiling on requested transaction history, in days.
+MAX_DAYS_REQUESTED = 730
 
 
 def _products(names: Iterable[str]) -> list[Products]:
@@ -121,6 +125,7 @@ def link_token_create(
     url_lifetime_seconds: int | None = None,
     access_token: str | None = None,
     account_selection_enabled: bool = False,
+    transactions_days_requested: int | None = MAX_DAYS_REQUESTED,
 ) -> dict[str, Any]:
     """Create a link_token, the input to one Link session.
 
@@ -152,7 +157,17 @@ def link_token_create(
             account_selection_enabled=account_selection_enabled
         )
     else:
-        kwargs["products"] = _products(products)
+        product_list = list(products)
+        kwargs["products"] = _products(product_list)
+        # **This is the one that governs history depth, not the flag on
+        # /transactions/sync.** Transactions are initialized when the Item is
+        # created, so by the time a sync runs the window is already fixed.
+        # Learned the hard way 2026-08-16: a Capital One Item linked without
+        # this came back with 86 days despite the first sync asking for 730.
+        if transactions_days_requested and "transactions" in product_list:
+            kwargs["transactions"] = LinkTokenTransactions(
+                days_requested=transactions_days_requested
+            )
     if webhook:
         kwargs["webhook"] = webhook
     if hosted:
@@ -239,9 +254,6 @@ def identity_get(client: PlaidApi, access_token: str) -> dict[str, Any]:
 
 
 # --- transactions ----------------------------------------------------------
-
-
-MAX_DAYS_REQUESTED = 730
 
 
 def transactions_sync(
