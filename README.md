@@ -162,10 +162,12 @@ Two flags apply broadly:
 - **`/transactions/sync` is stateful.** It returns only what changed since the
   stored cursor, so a second run legitimately returns nothing. `--reset`
   replays from the beginning.
-- **`--days-requested` only applies on an Item's first sync**, and cannot be
-  widened later without re-linking. It defaults to the 730-day maximum here
-  rather than Plaid's 90-day default, because getting it wrong is not
-  recoverable. The institution may return less than requested.
+- **History depth is set at LINK time, not sync time.** Use
+  `hosted-link --days-requested` (default 730). Transactions are initialized
+  when the Item is created, so the identically-named flag on `transactions`
+  arrives too late and does nothing on an Item created through Link. Neither
+  can be widened afterwards — a too-small window means re-linking. The
+  institution may return less than requested.
 - **An empty first sync means "not ready", not "no transactions."** Plaid
   fetches in two phases and returns an empty delta while the historical pull is
   in flight. Sync again before concluding an account is empty.
