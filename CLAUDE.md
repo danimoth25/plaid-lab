@@ -543,6 +543,32 @@ because Amazon is the extreme case of the second kind, and the Walmart 6/26
 split is the same problem inside a single charge. So the store must be able to
 record *ambiguity* and a pending question, not only a resolved category.
 
+**Look the merchant up. Do not infer it from the name.** An ML classifier has to
+guess from the string; a model with web search does not, and guessing anyway is
+the wrong reflex. Both LunchMoney's classifier and a Claude Chat session
+independently miscategorised `PAPABEN'S` as restaurant/dining, because "Papa
+Ben's" reads as a diner. One search resolves it: Papa Ben's Train Place, a model
+train hobby shop on Bellaire Blvd in Houston. The merchant string plus the
+user's city was sufficient.
+
+The lookup also returns **which shape of merchant it is**, which is the part the
+name cannot give:
+
+- a train store sells one kind of thing -> deterministic, record it, never ask
+- Humble Bundle sells games, books and software -> the search surfaces the
+  ambiguity, so it correctly resolves to "flag and ask" rather than to a
+  confident wrong category
+
+Limits: works for merchants with a web presence, which is most retail. It will
+not help with PayPal's obscured descriptors or generic ACH strings — those still
+need bank-side cross-referencing. Cost is one search per *new* merchant, since
+the result becomes precedent.
+
+`merchant_category_code` (the bank's own MCC) is a second prior sitting unused in
+the Plaid payload — the Sandbox Uber row carried `4121`, and a hobby shop would
+be `5945`. Whether Capital One populates it is **unverified**; check before
+relying on it.
+
 **This design is explicitly deferred.** Per the user: work out the precedent
 model after the Plaid pipeline is up and running, not before. Do not build a
 rules engine ahead of the data flowing.
