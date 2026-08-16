@@ -349,16 +349,22 @@ empty account and look broken. Re-sync before concluding an Item has no data.
 
 **Plaid publishes no price list.** Their billing doc says so directly: "A price
 list is not available in the documentation." Rates appear only on the last page
-of the Production access request flow, and otherwise come from sales. Do not go
-looking for a public pricing page; there isn't one.
+of the **Production access request** flow, and otherwise come from sales. Do
+not go looking for a public pricing page; there isn't one.
+
+**The Trial Access flow is a different flow and shows no pricing** — it is KYC
+and security agreements only. This account went through Trial Access, so **no
+rates have ever been seen**. Don't assume otherwise or ask the user to recall a
+number they were never shown.
 
 **The Trial plan is perpetually free with no expiration**, bounded only by the
-10-Item limit. So at the current scale this project costs nothing, and the
-opacity is irrelevant until an 11th Item is needed.
+10-Item limit. So at the current scale this project costs nothing and the
+opacity is irrelevant. Everything below is dormant until there is a reason to
+leave the Trial.
 
-It stops being irrelevant on a paid plan, because **product choice at link time
-decides the billing shape for the life of the Item**, and products are fixed at
-link time:
+On a paid plan it would matter, because **product choice at link time decides
+the billing shape for the life of the Item**, and products are fixed at link
+time:
 
 | model | products | implication |
 |---|---|---|
@@ -369,10 +375,12 @@ link time:
 Consequences for this code, on a paid plan:
 
 - The live Capital One Item carries **two** subscription products
-  (`transactions`, `liabilities`) and so bills monthly twice over. Liabilities
-  earns its place only if statement and payment-due data is actually used;
-  otherwise it is a recurring charge for nothing. Dropping it means re-linking,
-  which spends an Item slot.
+  (`transactions`, `liabilities`) and would bill monthly twice over.
+  **Decision, 2026-08-16: leave it.** The user does not expect to use the
+  statement and payment-due data, but on the Trial it is free, and dropping it
+  means re-linking — which spends one of the 10 permanent Item slots to save
+  nothing. Revisit only if leaving the Trial becomes necessary, and link
+  future Items without `liabilities` unless there is a use for it.
 - **`balances` is a per-request charge.** `accounts` is not — it returns cached
   balances from the Item. A dashboard should call `accounts` by default and
   `balances` only when the user explicitly asks for a fresh pull. Do not put
