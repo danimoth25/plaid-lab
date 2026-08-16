@@ -57,6 +57,25 @@ it to the store with:
 the token is the only argument. Re-importing an Item preserves its stored
 transactions cursor.
 
+## Linking through a real browser (Hosted Link)
+
+`link` only works in Sandbox. The path that also works in Production is Hosted
+Link: Plaid hosts the Link page, so no frontend is needed.
+
+```powershell
+.venv\Scripts\python.exe -m plaid_lab hosted-link --products auth transactions --wait
+```
+
+It prints a `https://secure.plaid.com/hl/...` URL. Open it, complete the flow
+(Sandbox credentials are `user_good` / `pass_good`), and `--wait` polls
+`/link/token/get` until the session finishes, then exchanges the `public_token`
+and stores the Item. Without `--wait` it prints a `claim` command to run
+afterwards.
+
+This is the only path here that reaches an `access_token` the way Production
+requires — a real browser, with credentials typed into Plaid rather than into
+your code.
+
 ## Commands
 
 | Command | Endpoint | Notes |
@@ -65,7 +84,9 @@ transactions cursor.
 | `institutions` | `/institutions/get` | `--count`, `--country` |
 | `link` | `/sandbox/public_token/create` + `/item/public_token/exchange` | Sandbox only; `--institution`, `--products`, `--webhook` |
 | `import-token` | `/item/get` | adopt an `access_token` made elsewhere |
-| `link-token` | `/link/token/create` | the Production path, for the real Link UI |
+| `link-token` | `/link/token/create` | a bare `link_token`; needs your own Link frontend |
+| `hosted-link` | `/link/token/create` with `hosted_link` | Plaid hosts the page; `--wait` polls to completion |
+| `claim` | `/link/token/get` + `/item/public_token/exchange` | exchange a finished session's `public_token` |
 | `items` | (local) | what is in `items.json` |
 | `item` | `/item/get` | products, webhook, pending error |
 | `accounts` | `/accounts/get` | cached balances |

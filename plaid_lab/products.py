@@ -32,8 +32,10 @@ from plaid.model.item_public_token_exchange_request import (
 )
 from plaid.model.item_remove_request import ItemRemoveRequest
 from plaid.model.liabilities_get_request import LiabilitiesGetRequest
+from plaid.model.link_token_create_hosted_link import LinkTokenCreateHostedLink
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
+from plaid.model.link_token_get_request import LinkTokenGetRequest
 from plaid.model.products import Products
 from plaid.model.sandbox_item_fire_webhook_request import (
     SandboxItemFireWebhookRequest,
@@ -108,11 +110,17 @@ def link_token_create(
     country_codes: Iterable[str] = ("US",),
     language: str = "en",
     webhook: str | None = None,
+    hosted: bool = False,
+    url_lifetime_seconds: int | None = None,
 ) -> dict[str, Any]:
-    """Create a link_token for the real Link UI.
+    """Create a link_token, the input to one Link session.
 
-    Not needed for Sandbox mucking about, but it is the only path that works in
-    Production, so the CLI keeps it available for a hosted-Link handoff.
+    A link_token is NOT a credential for data -- it only configures the session.
+    The ladder is link_token -> (browser) -> public_token -> access_token.
+
+    With `hosted=True` the response also carries `hosted_link_url`: Plaid hosts
+    the Link page itself, so no frontend is needed to reach an access_token.
+    That makes this the practical Production path for a single-user app.
     """
     kwargs: dict[str, Any] = dict(
         client_name=client_name,
@@ -123,7 +131,36 @@ def link_token_create(
     )
     if webhook:
         kwargs["webhook"] = webhook
+    if hosted:
+        hosted_kwargs: dict[str, Any] = {}
+        if url_lifetime_seconds:
+            hosted_kwargs["url_lifetime_seconds"] = url_lifetime_seconds
+        kwargs["hosted_link"] = LinkTokenCreateHostedLink(**hosted_kwargs)
     return call(client.link_token_create, LinkTokenCreateRequest(**kwargs))
+
+
+def link_token_get(client: PlaidApi, link_token: str) -> dict[str, Any]:
+    """Read back a link_token's sessions.
+
+    `link_sessions` is absent until a session actually runs, and a finished one
+    carries the public_token at
+    `link_sessions[].results.item_add_results[].public_token`. Polling this is
+    how a Hosted Link session hands back its result without a webhook receiver
+    or a redirect URI.
+    """
+    return call(client.link_token_get, LinkTokenGetRequest(link_token=link_token))
+
+
+def public_tokens_from_sessions(link_token_get_response: dict[str, Any]) -> list[str]:
+    """Extract every public_token from a link_token_get response."""
+    tokens: list[str] = []
+    for session in link_token_get_response.get("link_sessions") or []:
+        results = session.get("results") or {}
+        for result in results.get("item_add_results") or []:
+            token = result.get("public_token")
+            if token:
+                tokens.append(token)
+    return tokens
 
 
 # --- item ------------------------------------------------------------------

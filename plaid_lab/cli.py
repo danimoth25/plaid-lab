@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import sys
+import time
 from typing import Any, Callable
 
 from . import fmt, products
@@ -213,6 +214,108 @@ def cmd_link_token(ctx: Context) -> int:
         print(f"request_id   {data.get('request_id')}")
 
     ctx.emit(data, render)
+    return 0
+
+
+def _store_public_token(ctx: Context, public_token: str) -> Item:
+    """Exchange a public_token and record the resulting Item."""
+    exchanged = products.item_public_token_exchange(ctx.client, public_token)
+    body = products.item_get(ctx.client, exchanged["access_token"]).get("item") or {}
+    institution_id = body.get("institution_id")
+    name = body.get("institution_name")
+    if not name and institution_id:
+        try:
+            detail = products.institutions_get_by_id(ctx.client, institution_id)
+            name = (detail.get("institution") or {}).get("name")
+        except PlaidError:
+            pass
+    return ctx.store.add(
+        Item(
+            item_id=exchanged["item_id"],
+            access_token=exchanged["access_token"],
+            environment=ctx.settings.env,
+            institution_id=institution_id,
+            institution_name=name,
+            products=list(body.get("products") or []),
+        )
+    )
+
+
+def _claim(ctx: Context, link_token: str) -> list[Item]:
+    """Exchange every public_token a link_token's sessions have produced."""
+    session_data = products.link_token_get(ctx.client, link_token)
+    claimed = []
+    for public_token in products.public_tokens_from_sessions(session_data):
+        claimed.append(_store_public_token(ctx, public_token))
+    return claimed
+
+
+def cmd_hosted_link(ctx: Context) -> int:
+    """Create a Hosted Link session -- Plaid hosts the page, so no frontend.
+
+    This is the only path in the repo that reaches an access_token the way
+    Production requires: a real browser, real credentials typed into Plaid.
+    In Sandbox the credentials are user_good / pass_good.
+    """
+    data = products.link_token_create(
+        ctx.client,
+        client_user_id=ctx.args.user,
+        products=ctx.args.products,
+        country_codes=ctx.args.country,
+        webhook=ctx.args.webhook,
+        hosted=True,
+        url_lifetime_seconds=ctx.args.lifetime,
+    )
+    if ctx.args.json:
+        print(dumps(data))
+        return 0
+
+    link_token = data["link_token"]
+    print(f"open this in a browser:\n\n  {data.get('hosted_link_url')}\n")
+    print(f"link_token   {link_token}")
+    print(f"expiration   {data.get('expiration')}")
+    if ctx.settings.is_sandbox:
+        print("credentials  user_good / pass_good")
+
+    if not ctx.args.wait:
+        print(f"\nthen claim it:\n  python -m plaid_lab claim {link_token}")
+        return 0
+
+    print(f"\npolling for a finished session (timeout {ctx.args.timeout}s)...")
+    deadline = time.monotonic() + ctx.args.timeout
+    while True:
+        claimed = _claim(ctx, link_token)
+        if claimed:
+            for item in claimed:
+                print(f"\nlinked {item.label()}")
+                print(f"  products     {', '.join(item.products) or '(none)'}")
+            return 0
+        if time.monotonic() >= deadline:
+            print(
+                f"\ntimed out. The link_token is still valid until "
+                f"{data.get('expiration')}; finish in the browser and run:\n"
+                f"  python -m plaid_lab claim {link_token}",
+                file=sys.stderr,
+            )
+            return 1
+        time.sleep(ctx.args.poll)
+
+
+def cmd_claim(ctx: Context) -> int:
+    """Exchange the public_token(s) from a completed Link session."""
+    claimed = _claim(ctx, ctx.args.link_token)
+    if not claimed:
+        print(
+            "No finished session on that link_token yet. `link_sessions` stays "
+            "absent until Link runs, so this means the browser flow is "
+            "incomplete.",
+            file=sys.stderr,
+        )
+        return 1
+    for item in claimed:
+        print(f"linked {item.label()}")
+        print(f"  products     {', '.join(item.products) or '(none)'}")
+        print(f"  stored in    {ctx.store.path}")
     return 0
 
 
@@ -676,6 +779,29 @@ def build_parser() -> argparse.ArgumentParser:
     link_token.add_argument("--products", nargs="+", default=["transactions"])
     link_token.add_argument("--country", nargs="+", default=["US"])
     link_token.add_argument("--webhook")
+
+    hosted = add(
+        "hosted-link",
+        cmd_hosted_link,
+        "Create a Hosted Link session; Plaid hosts the page, no frontend needed.",
+    )
+    hosted.add_argument("--user", default="plaid-lab-user")
+    hosted.add_argument("--products", nargs="+", default=["transactions"])
+    hosted.add_argument("--country", nargs="+", default=["US"])
+    hosted.add_argument("--webhook")
+    hosted.add_argument(
+        "--lifetime", type=int, help="URL lifetime in seconds (default: Plaid's)"
+    )
+    hosted.add_argument(
+        "--wait", action="store_true", help="poll until the session finishes"
+    )
+    hosted.add_argument("--timeout", type=int, default=300)
+    hosted.add_argument("--poll", type=int, default=3)
+
+    claim = add(
+        "claim", cmd_claim, "Exchange the public_token from a finished session."
+    )
+    claim.add_argument("link_token")
 
     add("items", cmd_items, "List locally stored Items.")
     add("item", cmd_item, "Item status, products and pending errors.", item=True)

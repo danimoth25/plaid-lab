@@ -59,6 +59,22 @@ was silently truncating at 100 rows of 1170. See the pagination note below.
 - **Sandbox can skip Link entirely** via `/sandbox/public_token/create`. Plaid
   recommends this over driving the Link UI in tests. Production has no
   equivalent — there the browser flow is mandatory.
+- **`/link/token/create` returns a `link_token`, which is not a credential for
+  any data.** It configures one Link session and nothing else. The ladder is
+  `link_token` -> (browser) -> `public_token` -> `access_token`, and only the
+  last one reads data. The dashboard's curl snippet for it looks like a token
+  minting call and is not one; this confused the user once already.
+- **Hosted Link removes the need for a frontend.** Passing `hosted_link` to
+  `/link/token/create` adds `hosted_link_url` to the response — Plaid hosts the
+  Link page at `https://secure.plaid.com/hl/<id>`. Verified 2026-08-15. For a
+  single-user personal app this is the whole Production linking story; don't
+  build a web frontend for it.
+- **A Hosted Link session hands its result back through `/link/token/get`.**
+  `link_sessions` is *absent* until a session actually runs, and a finished one
+  carries the token at
+  `link_sessions[].results.item_add_results[].public_token`. Polling that is an
+  alternative to running a webhook receiver or a redirect URI, which a local
+  script cannot host. `products.public_tokens_from_sessions` extracts them.
 - **The API is versioned by date**, pinned here to `2020-09-14` in
   `config.py`. Response shapes differ across versions; do not let the dashboard
   default decide.
