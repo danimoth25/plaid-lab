@@ -75,6 +75,23 @@ was silently truncating at 100 rows of 1170. See the pagination note below.
   `link_sessions[].results.item_add_results[].public_token`. Polling that is an
   alternative to running a webhook receiver or a redirect URI, which a local
   script cannot host. `products.public_tokens_from_sessions` extracts them.
+  Verified end to end 2026-08-15 through a real browser session.
+- **One `link_token` can report several sessions, most of them junk.** A single
+  browser run returned two: one finished with results, one with
+  `finished_at: null`, no `results`, and only `OPEN`/`TRANSITION_VIEW` events.
+  Iterate and select on the presence of `item_add_results`; never index
+  `link_sessions[0]`.
+- **The session result carries the selected accounts before the exchange** —
+  `item_add_results[].accounts` has id, name, mask, type and subtype. Useful
+  for showing the user what they linked without a follow-up `/accounts/get`.
+- **`/item/public_token/exchange` is idempotent per `public_token`.**
+  Exchanging the same one twice succeeds and returns the *same* `item_id`
+  rather than erroring or creating a second Item. Verified 2026-08-15. Do not
+  rely on an error to detect a double claim.
+- **Sandbox Hosted Link runs a phone/OTP step.** The event trail was
+  `OPEN, TRANSITION_VIEW, SUBMIT_PHONE, VERIFY_PHONE, SUBMIT_OTP,
+  SELECT_INSTITUTION, SUBMIT_CREDENTIALS, HANDOFF`. It is not credentials-only,
+  so a Link session takes ~25s of human time, not 5.
 - **The API is versioned by date**, pinned here to `2020-09-14` in
   `config.py`. Response shapes differ across versions; do not let the dashboard
   default decide.
@@ -146,6 +163,13 @@ was silently truncating at 100 rows of 1170. See the pagination note below.
 - **Item selection fails closed.** `ItemStore.select` refuses to guess when
   several Items match or none is named — same rule as the Schwab repo's account
   tails. Don't add a "default to the first" fallback.
+- **`ItemStore.add` merges rather than replaces, and that is load-bearing.**
+  Re-adding an existing Item preserves its transactions cursor and
+  `created_at`. Without it, re-importing a token or claiming a Link session
+  twice silently resets the cursor and the next sync replays the Item's entire
+  history as `added`. This was a real bug: the guard existed at the
+  `import-token` call site and was forgotten on the claim path, so it now lives
+  in the store where no caller can miss it. Don't move it back out.
 - Console output is cp1252 on this machine, so em-dashes and box-drawing
   characters come back as `?`. `fmt.py` is ASCII-only on purpose; keep it that
   way.

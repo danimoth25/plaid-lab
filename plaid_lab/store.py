@@ -71,11 +71,26 @@ class ItemStore:
             raise
 
     def add(self, item: Item) -> Item:
+        """Insert or replace by item_id, preserving sync state.
+
+        Re-adding an Item is routine: re-importing a token, or claiming a Link
+        session twice (Plaid's public_token exchange is idempotent and returns
+        the same item_id). A naive replace drops the transactions cursor, and
+        the next sync then replays the Item's entire history as `added` --
+        verified 2026-08-15, cursor went from set to unset on a second claim.
+
+        So the merge lives here rather than at each call site, where it was
+        already forgotten once. A caller wanting a genuine resync passes an
+        explicit cursor, or uses `transactions --reset`.
+        """
         item.created_at = item.created_at or datetime.now(timezone.utc).isoformat(
             timespec="seconds"
         )
         existing = next((i for i in self.items if i.item_id == item.item_id), None)
         if existing:
+            if item.cursor is None:
+                item.cursor = existing.cursor
+            item.created_at = existing.created_at or item.created_at
             self.items[self.items.index(existing)] = item
         else:
             self.items.append(item)

@@ -175,6 +175,8 @@ def cmd_import_token(ctx: Context) -> int:
     existing = next(
         (i for i in ctx.store.items if i.item_id == body.get("item_id")), None
     )
+    # ItemStore.add preserves an existing cursor, so re-importing an Item does
+    # not replay its whole transaction history.
     item = ctx.store.add(
         Item(
             item_id=body["item_id"],
@@ -183,9 +185,6 @@ def cmd_import_token(ctx: Context) -> int:
             institution_id=institution_id,
             institution_name=name,
             products=list(body.get("products") or []),
-            # Re-importing the same Item must not silently replay its whole
-            # transaction history, so an existing cursor survives the update.
-            cursor=existing.cursor if existing else None,
         )
     )
     verb = "updated" if existing else "imported"
