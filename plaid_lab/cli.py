@@ -725,6 +725,74 @@ def cmd_transactions(ctx: Context) -> int:
     return 0
 
 
+def cmd_history(ctx: Context) -> int:
+    """Per-account transaction coverage: count, oldest and newest date.
+
+    Exists so that answering "how far back does this Item reach" never requires
+    a hand-written script holding an access_token. It reports dates and counts
+    only -- no descriptions, no amounts -- so the output is safe to paste.
+
+    Reads with a throwaway cursor so the Item's stored sync position is not
+    disturbed.
+    """
+    item = ctx.item()
+    data = products.transactions_sync(
+        ctx.client, item.access_token, cursor=None, days_requested=None
+    )
+    # The roster comes from /accounts/get, not from the sync response. Sync's
+    # `accounts` array is not guaranteed to list every account on the Item --
+    # observed 2026-08-16, where it omitted a card whose transactions it had
+    # nonetheless returned, making the per-account rows silently under-sum.
+    accounts = {
+        a["account_id"]: a
+        for a in products.accounts_get(ctx.client, item.access_token)["accounts"]
+    }
+    dates_by_account: dict[str, list[str]] = {}
+    for tx in data["added"]:
+        dates_by_account.setdefault(tx["account_id"], []).append(tx["date"])
+
+    def render() -> None:
+        rows = []
+        for account_id, account in accounts.items():
+            dates = sorted(dates_by_account.get(account_id, []))
+            rows.append(
+                [
+                    f"{account.get('name')} ({account.get('mask')})",
+                    f"{account.get('type')}/{account.get('subtype')}",
+                    len(dates),
+                    dates[0] if dates else "-",
+                    dates[-1] if dates else "-",
+                ]
+            )
+        # Anything referencing an account the roster does not know about would
+        # otherwise vanish from the table while still counting in the total.
+        for orphan in set(dates_by_account) - set(accounts):
+            dates = sorted(dates_by_account[orphan])
+            rows.append(
+                [f"(unknown {orphan[:8]}...)", "-", len(dates), dates[0], dates[-1]]
+            )
+        print(fmt.heading(f"{item.label()} coverage"))
+        print(fmt.table(rows, ["account", "type", "count", "oldest", "newest"]))
+
+        all_dates = sorted(t["date"] for t in data["added"])
+        if not all_dates:
+            print("\nNo transactions. A fresh Item may still be initializing.")
+            return
+        oldest = dt.date.fromisoformat(all_dates[0])
+        lookback = (dt.date.today() - oldest).days
+        print(
+            f"\ntotal {len(all_dates)}  |  oldest {all_dates[0]}  |  "
+            f"newest {all_dates[-1]}  |  lookback {lookback} days"
+        )
+        if ctx.args.since:
+            reaches = all_dates[0] <= ctx.args.since
+            count = sum(1 for d in all_dates if d >= ctx.args.since)
+            print(f"reaches {ctx.args.since}: {reaches}  ({count} on or after)")
+
+    ctx.emit({k: v for k, v in data.items() if k != "added"}, render)
+    return 0
+
+
 def cmd_investments(ctx: Context) -> int:
     """Holdings, joined to the securities they reference."""
     item = ctx.item()
@@ -1098,6 +1166,16 @@ def build_parser() -> argparse.ArgumentParser:
             "history to request, 1-730. Only applies on an Item's FIRST sync "
             "and cannot be widened later without re-linking"
         ),
+    )
+
+    history = add(
+        "history",
+        cmd_history,
+        "Per-account transaction coverage: count, oldest, newest.",
+        item=True,
+    )
+    history.add_argument(
+        "--since", help="report whether coverage reaches this date, e.g. 2026-01-01"
     )
 
     add("investments", cmd_investments, "Investment holdings.", item=True)

@@ -173,6 +173,23 @@ was silently truncating at 100 rows of 1170. See the pagination note below.
     describe this as solving the problem.
 - **Never print, log, or echo a credential.** `Settings.masked()` exists for
   this; use it rather than formatting credentials by hand.
+- **Do the work through the CLI, not through ad-hoc `python -c` scripts.** Set
+  by the user 2026-08-16 after a Production link was driven with inline scripts
+  that read `item.access_token` and passed it around. Nothing leaked — what got
+  echoed were `link_token`s and `hosted_link_url`s, not credentials — but the
+  method put live tokens one stray `print` or traceback away from the session
+  transcript, and a Sandbox `access_token` had already been pasted into a
+  script earlier the same session.
+  - Linking and claiming go through `hosted-link` / `claim` / `relink`. Do not
+    hand-roll `link_token_create` calls.
+  - If a question cannot be answered with an existing command, **add a
+    command** rather than scripting around the library. `history` exists
+    because "how far back does this Item reach" kept being answered with a
+    throwaway script.
+  - Reporting commands should emit aggregates — counts, dates, field presence —
+    rather than transaction descriptions, amounts or balances, so their output
+    is safe to paste. `history` follows this; `accounts` and `balances` do not,
+    by design, so prefer `history` when the question is about coverage.
 - **Nothing outside `products.py` imports `plaid.model.*`.** One function per
   endpoint, plain Python values in and out, so a library bump lands in one file.
   New endpoints go there first, then get a CLI command.
@@ -377,16 +394,32 @@ a product list; the API will 400. The user has accepted the loss: they carry
 zero or near-zero card balances, so utilization is not meaningful for them, and
 credit limits can be filled in by hand later if a use for them appears.
 
-**Whether Capital One can actually serve more than ~90 days is still
-undetermined.** Two hypotheses fit the 86 days equally well: our link-time
-setting was missing (established), or Capital One caps history near 90 days
-regardless (untested). The decisive test is a fresh link with
-`hosted-link --days-requested 730` now that it is wired, and comparing the
-oldest returned date. Do not record a conclusion here until that has been run.
+**Settled 2026-08-16: Capital One caps transaction history near 90 days.** A
+second Item was linked with `days_requested=730` set correctly at link time and
+returned *identical* coverage to the first, which had taken the 90-day default:
 
-If Capital One does cap near 90 days, the user's 2026-01-01 target is
-unreachable through Plaid and the historical CSV import becomes necessary after
-all, covering roughly January through May 2026.
+    Item 1 (90d default)   236 transactions, oldest 2026-05-21, 86 days
+    Item 2 (730d at link)  236 transactions, oldest 2026-05-21, 86 days
+
+So the two-`days_requested` bug was real but was **not** the cause of the short
+history. Do not re-litigate this by re-linking again; the experiment has been
+run with the setting in place and the ceiling is the institution's.
+
+Consequences:
+
+- **The 2026-01-01 target is unreachable through Plaid.** The historical CSV
+  import is necessary after all, covering roughly 2026-01-01 to 2026-05-21.
+  Plaid owns everything from the seam forward.
+- Keep `days_requested=730` at link time anyway. It costs nothing and other
+  institutions (Schwab, later) may honour more.
+- Two identical Capital One Items now exist. Linking a second did **not**
+  invalidate the first, confirming Capital One is not subject to the
+  PNC/Chase behaviour of invalidating an existing Item. One should be removed.
+
+`transactions_sync`'s `accounts` array is **not** a reliable roster — Item 2's
+sync omitted the Savor card while still returning its transactions. Build
+account lists from `/accounts/get`. `cmd_history` did this wrong once and
+under-summed its own table.
 
 ## The storage decision, which the sync model forces
 
