@@ -52,6 +52,9 @@ from plaid.model.sandbox_public_token_create_request import (
 from plaid.model.sandbox_public_token_create_request_options import (
     SandboxPublicTokenCreateRequestOptions,
 )
+from plaid.model.transactions_get_request import TransactionsGetRequest
+from plaid.model.transactions_get_request_options import TransactionsGetRequestOptions
+from plaid.model.transactions_refresh_request import TransactionsRefreshRequest
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
 from plaid.model.transactions_sync_request_options import (
     TransactionsSyncRequestOptions,
@@ -309,6 +312,72 @@ def transactions_sync(
         "next_cursor": cursor,
         "pages": pages,
     }
+
+
+def transactions_get(
+    client: PlaidApi,
+    access_token: str,
+    start_date: dt.date,
+    end_date: dt.date,
+    days_requested: int | None = MAX_DAYS_REQUESTED,
+    page_size: int = 500,
+) -> dict[str, Any]:
+    """The legacy date-window endpoint, kept as a diagnostic.
+
+    `/transactions/sync` is the endpoint to build on, but it exposes no way to
+    ask "is there anything older than what you have given me". This one takes
+    an explicit `start_date`, and its options carry their own `days_requested`,
+    so it can be used to probe whether an Item's window is genuinely exhausted
+    or merely not yet filled.
+
+    Paginates on `total_transactions`, like investments -- there is no
+    `has_more` here either.
+    """
+    transactions: list[dict[str, Any]] = []
+    accounts: list[dict[str, Any]] = []
+    total = 0
+    pages = 0
+
+    while True:
+        options: dict[str, Any] = {"count": page_size, "offset": len(transactions)}
+        if days_requested:
+            options["days_requested"] = days_requested
+        page = call(
+            client.transactions_get,
+            TransactionsGetRequest(
+                access_token=access_token,
+                start_date=start_date,
+                end_date=end_date,
+                options=TransactionsGetRequestOptions(**options),
+            ),
+        )
+        pages += 1
+        batch = page.get("transactions") or []
+        transactions.extend(batch)
+        accounts = page.get("accounts") or accounts
+        total = page.get("total_transactions") or len(transactions)
+        if len(transactions) >= total or not batch:
+            break
+
+    return {
+        "transactions": transactions,
+        "accounts": accounts,
+        "total_transactions": total,
+        "pages": pages,
+    }
+
+
+def transactions_refresh(client: PlaidApi, access_token: str) -> dict[str, Any]:
+    """Ask Plaid to re-fetch transactions from the institution now.
+
+    Normally Plaid updates one to four times a day on its own schedule. This
+    forces it. Capital One rejects it for credit-card-only Items; this Item is
+    not one, so it should apply.
+    """
+    return call(
+        client.transactions_refresh,
+        TransactionsRefreshRequest(access_token=access_token),
+    )
 
 
 # --- investments and liabilities -------------------------------------------

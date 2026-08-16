@@ -736,9 +736,26 @@ def cmd_history(ctx: Context) -> int:
     disturbed.
     """
     item = ctx.item()
-    data = products.transactions_sync(
-        ctx.client, item.access_token, cursor=None, days_requested=None
-    )
+    if ctx.args.start:
+        # /transactions/get takes an explicit window, so it can answer "is
+        # there anything older" -- a question sync cannot express.
+        raw = products.transactions_get(
+            ctx.client,
+            item.access_token,
+            start_date=dt.date.fromisoformat(ctx.args.start),
+            end_date=dt.date.today(),
+        )
+        data = {
+            "added": raw["transactions"],
+            "accounts": raw["accounts"],
+            "pages": raw["pages"],
+            "via": f"/transactions/get from {ctx.args.start}",
+        }
+    else:
+        data = products.transactions_sync(
+            ctx.client, item.access_token, cursor=None, days_requested=None
+        )
+        data["via"] = "/transactions/sync"
     # The roster comes from /accounts/get, not from the sync response. Sync's
     # `accounts` array is not guaranteed to list every account on the Item --
     # observed 2026-08-16, where it omitted a card whose transactions it had
@@ -771,7 +788,7 @@ def cmd_history(ctx: Context) -> int:
             rows.append(
                 [f"(unknown {orphan[:8]}...)", "-", len(dates), dates[0], dates[-1]]
             )
-        print(fmt.heading(f"{item.label()} coverage"))
+        print(fmt.heading(f"{item.label()} coverage via {data['via']}"))
         print(fmt.table(rows, ["account", "type", "count", "oldest", "newest"]))
 
         all_dates = sorted(t["date"] for t in data["added"])
@@ -790,6 +807,20 @@ def cmd_history(ctx: Context) -> int:
             print(f"reaches {ctx.args.since}: {reaches}  ({count} on or after)")
 
     ctx.emit({k: v for k, v in data.items() if k != "added"}, render)
+    return 0
+
+
+def cmd_refresh(ctx: Context) -> int:
+    """Force an on-demand transactions re-fetch at the institution."""
+    item = ctx.item()
+    data = products.transactions_refresh(ctx.client, item.access_token)
+    ctx.emit(
+        data,
+        lambda: print(
+            f"refresh requested for {item.label()}\n"
+            "Plaid fetches asynchronously; re-check with `history` shortly."
+        ),
+    )
     return 0
 
 
@@ -1176,6 +1207,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     history.add_argument(
         "--since", help="report whether coverage reaches this date, e.g. 2026-01-01"
+    )
+    history.add_argument(
+        "--start",
+        help=(
+            "probe with /transactions/get from this date instead of "
+            "/transactions/sync, to test whether older data exists"
+        ),
+    )
+
+    add(
+        "refresh",
+        cmd_refresh,
+        "Force Plaid to re-fetch transactions from the institution now.",
+        item=True,
     )
 
     add("investments", cmd_investments, "Investment holdings.", item=True)

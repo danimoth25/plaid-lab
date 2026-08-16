@@ -345,6 +345,30 @@ immediately, so this is timing-dependent and will not reproduce reliably. A
 dashboard that syncs right after linking and renders the result will show an
 empty account and look broken. Re-sync before concluding an Item has no data.
 
+## The Item budget — 10, and removal does not refund
+
+**The Production free trial allows 10 Items, and `/item/remove` does NOT free
+the slot.** Confirmed by the user against Plaid's documentation, 2026-08-16.
+A deleted Item is gone but its slot stays spent.
+
+This changes how Production work is done here:
+
+- **Do not link an Item to test a hypothesis.** There is no undo. Two Capital
+  One Items were burned proving a `days_requested` behaviour that was written
+  down in Plaid's own docs the whole time. That is 2 of 10 slots, permanently,
+  for an answer that cost one doc fetch.
+- **Read the documentation before linking anything.** Not as general good
+  practice — as the only way to avoid spending an irreversible resource.
+- Sandbox has no such limit. Every behavioural question that Sandbox can answer
+  belongs there. Link in Production only to reach data that is actually wanted.
+- Before any new Production link, state which of the remaining slots it spends
+  and why it cannot be answered in Sandbox or from docs.
+
+Budget as of 2026-08-16: **2 of 10 spent**, 1 Item live (Capital One), 8
+remaining. Expected future needs are modest — Schwab, and whatever other
+institutions the user actually banks with — so 8 is comfortable, but only if no
+more are spent on experiments.
+
 ## The live Capital One Item (linked 2026-08-16)
 
 First Production link. `liabilities,transactions` — **no `auth`**, deliberately,
@@ -394,27 +418,43 @@ a product list; the API will 400. The user has accepted the loss: they carry
 zero or near-zero card balances, so utilization is not meaningful for them, and
 credit limits can be filled in by hand later if a use for them appears.
 
-**Settled 2026-08-16: Capital One caps transaction history near 90 days.** A
-second Item was linked with `days_requested=730` set correctly at link time and
-returned *identical* coverage to the first, which had taken the 90-day default:
+**Settled, and it is documented — Capital One provides 90 days, full stop.**
+Plaid's Transactions documentation states it outright:
 
-    Item 1 (90d default)   236 transactions, oldest 2026-05-21, 86 days
-    Item 2 (730d at link)  236 transactions, oldest 2026-05-21, 86 days
+> The user's institution may provide limited transaction history. For example,
+> Capital One provides only 90 days of transaction history and does not provide
+> pending transactions.
 
-So the two-`days_requested` bug was real but was **not** the cause of the short
-history. Do not re-litigate this by re-linking again; the experiment has been
-run with the setting in place and the ceiling is the institution's.
+So the 86 days observed is the institution's published limit, not a bug, not a
+tier, and not an unfinished historical update. **Do not investigate this
+again.** Everything below was already tested and all of it is consistent with
+the documented 90 days:
 
-Consequences:
+- `days_requested: 730` verified present in the link request.
+- `/transactions/get` asked explicitly from 2026-01-01 — nothing older than
+  2026-05-21.
+- `/transactions/refresh` completed (`last_successful_update` advanced from
+  03:48:13 to 03:56:50) and returned the same 86 days.
+- A second Item linked with `days_requested=730` set correctly at link time
+  returned coverage identical to one that took the 90-day default.
 
-- **The 2026-01-01 target is unreachable through Plaid.** The historical CSV
-  import is necessary after all, covering roughly 2026-01-01 to 2026-05-21.
-  Plaid owns everything from the seam forward.
-- Keep `days_requested=730` at link time anyway. It costs nothing and other
-  institutions (Schwab, later) may honour more.
-- Two identical Capital One Items now exist. Linking a second did **not**
-  invalidate the first, confirming Capital One is not subject to the
-  PNC/Chase behaviour of invalidating an existing Item. One should be removed.
+The same doc confirms the initialization rule the code already follows:
+
+> this field will only take effect when Transactions is added to an Item for
+> the first time; if you need more than 90 days ... you will need to delete the
+> Item and create a new one.
+
+**Process note.** This conclusion was reached, then retracted on a user recollection
+that another app had pulled full history from the same login, then restored
+when the user found the documentation. The retraction was reasonable on the
+evidence at the time. The cheaper path was to read Plaid's Transactions doc
+before running any of the four tests above — the answer was one fetch away.
+See the standing rule about consulting reference material first.
+
+**Consequence: the 2026-01-01 target is unreachable through Plaid.** The
+historical CSV import is required, covering 2026-01-01 to roughly 2026-05-21.
+Plaid owns everything from the seam forward. Keep `days_requested=730` at link
+time anyway — it costs nothing and other institutions may honour more.
 
 `transactions_sync`'s `accounts` array is **not** a reliable roster — Item 2's
 sync omitted the Savor card while still returning its transactions. Build
