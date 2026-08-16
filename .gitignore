@@ -23,3 +23,20 @@ items.json
 
 # Generated exports.
 exports/
+
+# --- Financial source data. NEVER COMMIT. ---------------------------------
+# This repo is PUBLIC. Everything below carries real statements, balances,
+# account numbers, merchant history, or third-party names. The rules are
+# deliberately broad: a missed entry here is an irreversible disclosure, and
+# `git add -A` is used routinely in this repo.
+*.zip
+*.csv
+*.pdf
+*.xlsx
+*.xls
+*.ofx
+*.qfx
+budget/
+data/
+provided_files/
+statements/
