@@ -10,10 +10,12 @@ whichever secret matches `PLAID_ENV`. Getting that pair wrong produces
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+from . import secrets
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -40,6 +42,8 @@ class Settings:
     client_id: str
     secret: str
     env: str
+    #: Where each credential came from, for `secrets` / `env` to report.
+    sources: dict[str, str] = field(default_factory=dict)
 
     @property
     def host(self) -> str:
@@ -52,8 +56,8 @@ class Settings:
     def masked(self) -> dict[str, str]:
         """Safe-to-print view. Never log or return the raw secret."""
         return {
-            "client_id": _mask(self.client_id),
-            "secret": _mask(self.secret),
+            "client_id": f"{_mask(self.client_id)}  ({self.sources.get('client_id')})",
+            "secret": f"{_mask(self.secret)}  ({self.sources.get('secret')})",
             "env": self.env,
             "host": self.host,
             "api_version": API_VERSION,
@@ -69,6 +73,13 @@ def _mask(value: str) -> str:
 
 
 def load_settings() -> Settings:
+    """Resolve credentials, preferring the OS credential store over `.env`.
+
+    Precedence is keyring first so that migrating is a no-op switch: import the
+    values, delete `.env`'s secret lines, and nothing else changes. `.env` stays
+    supported as a fallback, and remains the right home for PLAID_ENV, which is
+    configuration rather than a secret.
+    """
     load_dotenv(REPO_ROOT / ".env")
 
     env = (os.getenv("PLAID_ENV") or "sandbox").strip().lower()
@@ -78,17 +89,34 @@ def load_settings() -> Settings:
             "Plaid removed the 'development' environment in 2024."
         )
 
-    client_id = (os.getenv("PLAID_CLIENT_ID") or "").strip()
-    secret = (os.getenv("PLAID_SECRET") or "").strip()
-    missing = [
-        name
-        for name, value in (("PLAID_CLIENT_ID", client_id), ("PLAID_SECRET", secret))
-        if not value
-    ]
+    sources: dict[str, str] = {}
+
+    def resolve(label: str, keyring_name: str, env_var: str) -> str:
+        try:
+            value = secrets.get(keyring_name)
+        except secrets.KeyringUnavailable:
+            value = None
+        if value:
+            sources[label] = "keyring"
+            return value.strip()
+        value = (os.getenv(env_var) or "").strip()
+        if value:
+            sources[label] = ".env"
+            return value
+        sources[label] = "missing"
+        return ""
+
+    client_id = resolve("client_id", secrets.CLIENT_ID, "PLAID_CLIENT_ID")
+    secret = resolve("secret", secrets.secret_key(env), "PLAID_SECRET")
+
+    missing = [n for n in ("client_id", "secret") if sources[n] == "missing"]
     if missing:
         raise ConfigError(
-            f"Missing {', '.join(missing)}. Copy .env.example to .env and fill in "
-            "the keys from https://dashboard.plaid.com/developers/keys"
+            f"Missing {', '.join(missing)} for environment {env!r}.\n"
+            "Store them in the OS credential store:\n"
+            "  python -m plaid_lab secrets set\n"
+            "or put PLAID_CLIENT_ID / PLAID_SECRET in .env "
+            "(keys: https://dashboard.plaid.com/developers/keys)"
         )
 
-    return Settings(client_id=client_id, secret=secret, env=env)
+    return Settings(client_id=client_id, secret=secret, env=env, sources=sources)

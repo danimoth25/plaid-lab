@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import secrets
 from .config import REPO_ROOT
 
 STORE_PATH = REPO_ROOT / "items.json"
@@ -31,14 +32,44 @@ class StoreError(RuntimeError):
 
 @dataclass
 class Item:
+    """One linked Item. Everything here is non-secret and lives in items.json.
+
+    The `access_token` is deliberately NOT a field: it is held in the OS
+    credential store under `access_token:<item_id>` and reached through the
+    `access_token` property. That keeps items.json inspectable and safe to read
+    over someone's shoulder while the actual credential never touches disk.
+    """
+
     item_id: str
-    access_token: str
     environment: str
     institution_id: str | None = None
     institution_name: str | None = None
     products: list[str] = field(default_factory=list)
     created_at: str = ""
     cursor: str | None = None
+
+    @property
+    def access_token(self) -> str:
+        token = secrets.get(secrets.access_token_key(self.item_id))
+        if not token:
+            raise StoreError(
+                f"No access_token stored for {self.label()}.\n"
+                "It lives in the OS credential store, not items.json. If this "
+                "Item predates that change, run: python -m plaid_lab secrets migrate"
+            )
+        return token
+
+    def store_access_token(self, token: str) -> None:
+        secrets.set(secrets.access_token_key(self.item_id), token)
+
+    def forget_access_token(self) -> bool:
+        return secrets.delete(secrets.access_token_key(self.item_id))
+
+    def has_access_token(self) -> bool:
+        try:
+            return bool(secrets.get(secrets.access_token_key(self.item_id)))
+        except secrets.KeyringUnavailable:
+            return False
 
     def label(self) -> str:
         name = self.institution_name or self.institution_id or "unknown institution"
@@ -49,13 +80,24 @@ class ItemStore:
     def __init__(self, path: Path = STORE_PATH):
         self.path = path
         self.items: list[Item] = []
+        self.legacy_tokens: dict[str, str] = {}
         self._load()
 
     def _load(self) -> None:
         if not self.path.exists():
             return
         raw = json.loads(self.path.read_text(encoding="utf-8") or "{}")
-        self.items = [Item(**row) for row in raw.get("items", [])]
+        self.items = []
+        self.legacy_tokens: dict[str, str] = {}
+        for row in raw.get("items", []):
+            row = dict(row)
+            # Items written before tokens moved to the credential store still
+            # carry one. Keep it aside for `secrets migrate` rather than
+            # silently dropping it, which would orphan the Item at Plaid.
+            token = row.pop("access_token", None)
+            if token:
+                self.legacy_tokens[row["item_id"]] = token
+            self.items.append(Item(**row))
 
     def save(self) -> None:
         """Write atomically: a half-written items.json loses access tokens."""
@@ -98,6 +140,7 @@ class ItemStore:
         return item
 
     def remove(self, item: Item) -> None:
+        item.forget_access_token()
         self.items = [i for i in self.items if i.item_id != item.item_id]
         self.save()
 

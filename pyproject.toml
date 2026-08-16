@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "plaid-python>=42.0.0",  # official client, pinned to API version 2020-09-14
     "python-dotenv>=1.0",
+    "keyring>=25.0",         # OS credential store; WinVaultKeyring on Windows
 ]
 
 [project.scripts]

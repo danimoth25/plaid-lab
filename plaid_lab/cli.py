@@ -12,15 +12,18 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import getpass
+import os
 import sys
 import time
 from typing import Any, Callable
 
 import plaid
+from dotenv import load_dotenv
 
-from . import fmt, products
+from . import fmt, products, secrets
 from .client import PlaidError, dumps, make_client
-from .config import ConfigError, Settings, load_settings
+from .config import REPO_ROOT, ConfigError, Settings, load_settings
 from .store import Item, ItemStore, StoreError
 
 
@@ -93,6 +96,160 @@ def cmd_env(ctx: Context) -> int:
     return 0
 
 
+def cmd_secrets(ctx: Context) -> int:
+    """Inspect and manage credentials in the OS credential store."""
+    action = ctx.args.action
+    ok, backend = secrets.available()
+    print(f"backend        {backend}")
+    if not ok:
+        print(
+            "\nNo usable OS credential store. Credentials will fall back to "
+            ".env.",
+            file=sys.stderr,
+        )
+        if action != "status":
+            return 1
+
+    if action == "status":
+        return _secrets_status(ctx)
+    if action == "migrate":
+        return _secrets_migrate(ctx)
+    if action == "set":
+        return _secrets_set(ctx)
+    if action == "clear":
+        return _secrets_clear(ctx)
+    raise ConfigError(f"unknown action {action!r}")
+
+
+def _secrets_status(ctx: Context) -> int:
+    rows = []
+    for env_name in ("sandbox", "production"):
+        key = secrets.secret_key(env_name)
+        try:
+            present = bool(secrets.get(key))
+        except secrets.KeyringUnavailable:
+            present = False
+        rows.append([f"secret ({env_name})", "keyring" if present else "-"])
+
+    try:
+        client_id_present = bool(secrets.get(secrets.CLIENT_ID))
+    except secrets.KeyringUnavailable:
+        client_id_present = False
+    rows.insert(0, ["client_id", "keyring" if client_id_present else "-"])
+
+    store = ctx.store
+    for item in store.items:
+        rows.append(
+            [
+                f"access_token ({item.label()})",
+                "keyring" if item.has_access_token() else "-",
+            ]
+        )
+
+    print(fmt.heading("credential store"))
+    print(fmt.table(rows, ["entry", "location"]))
+
+    dotenv_path = REPO_ROOT / ".env"
+    print(fmt.heading("plaintext on disk"))
+    leftovers = []
+    if dotenv_path.exists():
+        text = dotenv_path.read_text(encoding="utf-8")
+        for var in ("PLAID_CLIENT_ID", "PLAID_SECRET"):
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith(f"{var}=") and stripped != f"{var}=":
+                    leftovers.append(f".env  {var}")
+    if store.legacy_tokens:
+        for item_id in store.legacy_tokens:
+            leftovers.append(f"items.json  access_token for {item_id[:12]}...")
+    print("\n".join(f"  {row}" for row in leftovers) if leftovers else "  (none)")
+    if leftovers:
+        print("\nRun `secrets migrate` to move these into the credential store.")
+    return 0
+
+
+def _secrets_migrate(ctx: Context) -> int:
+    """One-time import of credentials from .env and items.json into keyring."""
+    moved = []
+
+    load_dotenv(REPO_ROOT / ".env")
+    env_name = ctx.settings.env if ctx.args.env is None else ctx.args.env
+
+    client_id = (os.getenv("PLAID_CLIENT_ID") or "").strip()
+    if client_id and not secrets.get(secrets.CLIENT_ID):
+        secrets.set(secrets.CLIENT_ID, client_id)
+        moved.append("client_id")
+
+    secret = (os.getenv("PLAID_SECRET") or "").strip()
+    if secret and not secrets.get(secrets.secret_key(env_name)):
+        secrets.set(secrets.secret_key(env_name), secret)
+        moved.append(f"secret ({env_name})")
+
+    store = ctx.store
+    for item_id, token in store.legacy_tokens.items():
+        secrets.set(secrets.access_token_key(item_id), token)
+        moved.append(f"access_token ({item_id[:12]}...)")
+    if store.legacy_tokens:
+        # Rewriting items.json drops the access_token fields, since Item no
+        # longer carries one.
+        store.save()
+
+    if not moved:
+        print("\nNothing to migrate; everything is already in the credential store.")
+        return 0
+
+    print(fmt.heading("moved into the credential store"))
+    for name in moved:
+        print(f"  {name}")
+    print(
+        "\nitems.json has been rewritten without access tokens."
+        "\n\nNow delete the secret lines from .env by hand -- this command will "
+        "not edit it,\nbecause a botched rewrite of the only copy of a "
+        "credential is unrecoverable.\nKeep PLAID_ENV; it is configuration, not "
+        "a secret."
+    )
+    return 0
+
+
+def _secrets_set(ctx: Context) -> int:
+    """Prompt for a credential and store it. Never echoes, never takes argv."""
+    name = ctx.args.name
+    env_name = ctx.args.env or ctx.settings.env if name == "secret" else None
+    key = secrets.CLIENT_ID if name == "client_id" else secrets.secret_key(env_name)
+    label = name if name == "client_id" else f"{name} ({env_name})"
+
+    # getpass, not an argument: a value on the command line lands in shell
+    # history and in the process list.
+    value = getpass.getpass(f"Paste {label} (input hidden): ").strip()
+    if not value:
+        print("Nothing entered; unchanged.", file=sys.stderr)
+        return 1
+    secrets.set(key, value)
+    print(f"stored {label} in the OS credential store")
+    return 0
+
+
+def _secrets_clear(ctx: Context) -> int:
+    """Remove every entry this project owns."""
+    removed = []
+    if secrets.delete(secrets.CLIENT_ID):
+        removed.append("client_id")
+    for env_name in ("sandbox", "production"):
+        if secrets.delete(secrets.secret_key(env_name)):
+            removed.append(f"secret ({env_name})")
+    for item in ctx.store.items:
+        if item.forget_access_token():
+            removed.append(f"access_token ({item.item_id[:12]}...)")
+    print(fmt.heading("removed"))
+    print("\n".join(f"  {r}" for r in removed) if removed else "  (nothing stored)")
+    if removed:
+        print(
+            "\nItems still exist at Plaid. Use `remove` to revoke them there, "
+            "or `import-token` to restore access."
+        )
+    return 0
+
+
 def cmd_institutions(ctx: Context) -> int:
     """List institutions available in this environment."""
     data = products.institutions_get(
@@ -127,26 +284,7 @@ def cmd_link(ctx: Context) -> int:
         initial_products=product_list,
         webhook=ctx.args.webhook,
     )
-    exchanged = products.item_public_token_exchange(ctx.client, public["public_token"])
-
-    name = None
-    try:
-        detail = products.institutions_get_by_id(ctx.client, institution_id)
-        name = (detail.get("institution") or {}).get("name")
-    except PlaidError:
-        # Cosmetic only; a missing display name must not lose the access_token.
-        pass
-
-    item = ctx.store.add(
-        Item(
-            item_id=exchanged["item_id"],
-            access_token=exchanged["access_token"],
-            environment=ctx.settings.env,
-            institution_id=institution_id,
-            institution_name=name,
-            products=list(product_list),
-        )
-    )
+    item = _store_public_token(ctx, public["public_token"])
     print(f"linked {item.label()}")
     print(f"  products     {', '.join(product_list)}")
     print(f"  stored in    {ctx.store.path}")
@@ -164,38 +302,21 @@ def cmd_import_token(ctx: Context) -> int:
     """
     token = ctx.args.token
     body = products.item_get(ctx.client, token).get("item") or {}
-    institution_id = body.get("institution_id")
-
-    name = body.get("institution_name")
-    if not name and institution_id:
-        try:
-            detail = products.institutions_get_by_id(ctx.client, institution_id)
-            name = (detail.get("institution") or {}).get("name")
-        except PlaidError:
-            pass
-
     existing = next(
         (i for i in ctx.store.items if i.item_id == body.get("item_id")), None
     )
     # ItemStore.add preserves an existing cursor, so re-importing an Item does
     # not replay its whole transaction history.
-    item = ctx.store.add(
-        Item(
-            item_id=body["item_id"],
-            access_token=token,
-            environment=ctx.settings.env,
-            institution_id=institution_id,
-            institution_name=name,
-            products=list(body.get("products") or []),
-        )
-    )
+    item = _record_item(ctx, body["item_id"], token)
+
     verb = "updated" if existing else "imported"
     print(f"{verb} {item.label()}")
     print(f"  products     {', '.join(item.products) or '(none)'}")
     error = body.get("error")
     if error:
         print(f"  error        {error.get('error_code')}")
-    print(f"  stored in    {ctx.store.path}")
+    print(f"  token in     OS credential store")
+    print(f"  metadata in  {ctx.store.path}")
     return 0
 
 
@@ -218,10 +339,14 @@ def cmd_link_token(ctx: Context) -> int:
     return 0
 
 
-def _store_public_token(ctx: Context, public_token: str) -> Item:
-    """Exchange a public_token and record the resulting Item."""
-    exchanged = products.item_public_token_exchange(ctx.client, public_token)
-    body = products.item_get(ctx.client, exchanged["access_token"]).get("item") or {}
+def _record_item(ctx: Context, item_id: str, access_token: str) -> Item:
+    """Persist an Item: token to the credential store, metadata to items.json.
+
+    The token is written first. If the metadata write then fails the token is
+    merely orphaned in the keyring, which is recoverable; the reverse order
+    would leave an Item recorded with no way to reach it.
+    """
+    body = products.item_get(ctx.client, access_token).get("item") or {}
     institution_id = body.get("institution_id")
     name = body.get("institution_name")
     if not name and institution_id:
@@ -230,16 +355,22 @@ def _store_public_token(ctx: Context, public_token: str) -> Item:
             name = (detail.get("institution") or {}).get("name")
         except PlaidError:
             pass
-    return ctx.store.add(
-        Item(
-            item_id=exchanged["item_id"],
-            access_token=exchanged["access_token"],
-            environment=ctx.settings.env,
-            institution_id=institution_id,
-            institution_name=name,
-            products=list(body.get("products") or []),
-        )
+
+    item = Item(
+        item_id=item_id,
+        environment=ctx.settings.env,
+        institution_id=institution_id,
+        institution_name=name,
+        products=list(body.get("products") or []),
     )
+    item.store_access_token(access_token)
+    return ctx.store.add(item)
+
+
+def _store_public_token(ctx: Context, public_token: str) -> Item:
+    """Exchange a public_token and record the resulting Item."""
+    exchanged = products.item_public_token_exchange(ctx.client, public_token)
+    return _record_item(ctx, exchanged["item_id"], exchanged["access_token"])
 
 
 def _claim(ctx: Context, link_token: str) -> list[Item]:
@@ -759,6 +890,28 @@ def build_parser() -> argparse.ArgumentParser:
         return sub
 
     add("env", cmd_env, "Show config and verify the API keys authenticate.")
+
+    sec = add(
+        "secrets", cmd_secrets, "Manage credentials in the OS credential store."
+    )
+    sec.add_argument(
+        "action",
+        nargs="?",
+        default="status",
+        choices=["status", "migrate", "set", "clear"],
+    )
+    sec.add_argument(
+        "name",
+        nargs="?",
+        default="secret",
+        choices=["client_id", "secret"],
+        help="for `set`: which credential",
+    )
+    sec.add_argument(
+        "--env",
+        choices=["sandbox", "production"],
+        help="which environment's secret (defaults to PLAID_ENV)",
+    )
 
     institutions = add(
         "institutions", cmd_institutions, "List institutions in this environment."

@@ -149,11 +149,30 @@ was silently truncating at 100 rows of 1170. See the pagination note below.
 
 ## Conventions
 
-- **Secrets never enter the repo.** `.env` and `items.json` are gitignored.
-  `items.json` holds `access_token`s — in Production each is a live credential
-  to a real bank account. Never print one, echo it into a log, or paste it into
-  a message. `Settings.masked()` exists for this; use it instead of formatting
-  credentials by hand.
+- **Secrets live in the OS credential store, not on disk** (set 2026-08-15,
+  before Production keys existed). `plaid_lab/secrets.py` wraps `keyring`,
+  which resolves to `WinVaultKeyring` here — the Windows Credential Locker,
+  DPAPI-encrypted against the logged-in account. Entries are `client_id`,
+  `secret:<environment>` and `access_token:<item_id>`.
+  - **`Item` has no `access_token` field.** It is a property backed by the
+    credential store. `items.json` now holds only non-secret metadata —
+    institution, products, cursor — and is safe to open in front of someone.
+    Do not add the token back to the dataclass.
+  - Resolution order is **keyring first, `.env` fallback**, so a fresh checkout
+    still works and migration is a no-op switch. `.env` is for `PLAID_ENV`,
+    which is configuration, not a secret.
+  - `secrets migrate` moves values in but **deliberately does not edit `.env`**
+    — a botched rewrite of the only copy of a credential is unrecoverable, so
+    that deletion stays manual.
+  - `secrets set` reads with `getpass`, never from argv, because a credential
+    on the command line lands in shell history and the process list.
+  - **What this buys:** protection against file theft, which is the realistic
+    threat — `.env` is a filename infostealers target by pattern. **What it
+    does not buy:** protection against code running as this user, which can
+    call the same API. No scheme that decrypts unattended does better. Do not
+    describe this as solving the problem.
+- **Never print, log, or echo a credential.** `Settings.masked()` exists for
+  this; use it rather than formatting credentials by hand.
 - **Nothing outside `products.py` imports `plaid.model.*`.** One function per
   endpoint, plain Python values in and out, so a library bump lands in one file.
   New endpoints go there first, then get a CLI command.
@@ -322,3 +341,30 @@ silently.
 
 Payments and money movement (Transfer, Payment Initiation) are out of scope and
 unwrapped. Don't add them speculatively.
+
+### What a stolen credential actually reaches
+
+Do not call this stack "read-only" without qualification — an earlier session
+did, and the user correctly pushed back. Three separate facts:
+
+1. **Plaid's API is not read-only.** Transfer moves money by ACH; Payment
+   Initiation does in the EU/UK. `transfer` even shows up in
+   `available_products` on the Sandbox Items here.
+2. **Those products require a separate Transfer Application and approval** —
+   "complete the Transfer Application and receive approval" — so they are not
+   reachable just because Production access exists. Confirm this account has
+   not been onboarded to Transfer, and leave it that way.
+3. **`auth` is the real escalation, and it needs no Plaid write endpoint at
+   all.** `/auth/get` returns account and routing numbers (the Sandbox Item
+   returns routing `011401533`, account `1111222233330000`). Anyone holding
+   those can attempt an ACH debit through any processor, entirely outside
+   Plaid.
+
+So the honest statement is: read access **to data that includes the means to
+move money elsewhere**, not "a read-only login".
+
+**Therefore: link Production Items with the minimum product set.** A budget and
+net-worth app needs `transactions`, `investments`, `liabilities` and `balance`.
+It does **not** need `auth`, and requesting it enlarges the blast radius of a
+stolen credential for no benefit. Products are fixed at link time, so this has
+to be right on the first link — same one-shot problem as `days_requested`.

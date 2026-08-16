@@ -37,8 +37,27 @@ copy .env.example .env      # then fill in the keys
 
 Get `client_id` and the **Sandbox** secret from
 <https://dashboard.plaid.com/developers/keys>. Plaid issues a separate secret
-per environment against the same `client_id`, so `PLAID_SECRET` has to be the
-one matching `PLAID_ENV`.
+per environment against the same `client_id`, so the secret has to be the one
+matching `PLAID_ENV`.
+
+Store them in the OS credential store rather than in `.env` — on Windows this
+is the Credential Locker, DPAPI-encrypted against your account:
+
+```powershell
+.venv\Scripts\python.exe -m plaid_lab secrets set client_id
+.venv\Scripts\python.exe -m plaid_lab secrets set secret --env sandbox
+.venv\Scripts\python.exe -m plaid_lab secrets status
+```
+
+Access tokens go there automatically as Items are linked, so `items.json` holds
+only non-secret metadata. `PLAID_CLIENT_ID` / `PLAID_SECRET` in `.env` still
+work as a fallback; `secrets migrate` moves an existing `.env` and `items.json`
+into the credential store in one step.
+
+This protects against file theft, which is the realistic threat — `.env` is a
+filename infostealers target by pattern. It does not protect against code
+running as your user, which can read the same values. Nothing that decrypts
+without a human present can.
 
 Verify:
 
@@ -105,6 +124,7 @@ your code.
 | Command | Endpoint | Notes |
 |---|---|---|
 | `env` | `/institutions/get` | config check + auth probe |
+| `secrets` | (local) | `status`, `migrate`, `set`, `clear` |
 | `institutions` | `/institutions/get` | `--count`, `--country` |
 | `link` | `/sandbox/public_token/create` + `/item/public_token/exchange` | Sandbox only; `--institution`, `--products`, `--webhook` |
 | `import-token` | `/item/get` | adopt an `access_token` made elsewhere |
