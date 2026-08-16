@@ -365,10 +365,17 @@ board, and two of them matter:
 are all populated. So statement and payment tracking is fine; utilization and
 APR modelling are not.
 
-Whether adding `balance` to the initial products changes any of this is
-**untested**. It looks unlikely — the endpoint already works without it, so the
-nulls read as Capital One not supplying the data rather than a permissions
-gate — but a re-link is the free moment to find out.
+**`balance` cannot be requested as an initial product, and never needs to be.**
+Plaid rejects it outright:
+
+    INVALID_PRODUCT: balance is not a valid product for this field. It is
+    automatically initialized when any other valid product is included.
+
+So there is no permissions gate behind the nulls and nothing to enable — the
+data is simply not supplied by Capital One. Do not propose adding `balance` to
+a product list; the API will 400. The user has accepted the loss: they carry
+zero or near-zero card balances, so utilization is not meaningful for them, and
+credit limits can be filled in by hand later if a use for them appears.
 
 **Whether Capital One can actually serve more than ~90 days is still
 undetermined.** Two hypotheses fit the 86 days equally well: our link-time
