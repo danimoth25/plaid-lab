@@ -227,12 +227,16 @@ constraint on this code:
   normally requires de-duplication via `pending_transaction_id` simply does not
   occur here. Transactions appear only once posted, so they land later than a
   Capital One user expects from the app UI.
-- **`/accounts/balance/get` needs a freshness spec for non-depository
-  accounts.** Wired 2026-08-15 as `balances --max-age <hours>`, defaulting to
-  6, which becomes `options.min_last_updated_datetime`. Send it as an *aware*
-  UTC datetime; Plaid rejects a naive one. Accepted in Sandbox, but Sandbox
-  does not enforce the requirement, so the Capital One behaviour is still
-  untested.
+- **The documented `min_last_updated_datetime` requirement did not
+  materialize.** Plaid's OAuth guide says Capital One "cannot use
+  `/accounts/balance/get` without specifying freshness requirements for
+  non-depository accounts". Tested live 2026-08-16 against the real Item, both
+  with and without the option: **both succeeded**, returning all 5 accounts and
+  identical data. Do not treat it as a blocker. It is still wired as
+  `balances --max-age <hours>` (default 6, sent as an aware UTC datetime —
+  Plaid rejects a naive one) because it is harmless and may matter for a
+  genuinely forced refresh, which is unverifiable here since
+  `last_updated_datetime` comes back null.
 - **`/transactions/refresh` errors on credit-card-only Items**, and **Identity
   is unsupported** on them.
 - **Past-due credit cards cannot be linked at all.**
@@ -339,6 +343,32 @@ so the credential does not carry ACH routing and account numbers.
   recovery path.
 - **History came back as 86 days (oldest 2026-05-21), not the 730 requested**,
   because of the two-`days_requested` bug above.
+
+### What Capital One does and does not return (verified live 2026-08-16)
+
+Balances need **no product at link time** — `/accounts/balance/get` works on
+this Item even though `billed_products` is only `liabilities,transactions`.
+All 5 accounts return `balances.current`. But three fields are empty across the
+board, and two of them matter:
+
+| field | state | consequence |
+|---|---|---|
+| `balances.current` | present, all 5 | net worth works |
+| `balances.available` | **null, all 5** — including checking and savings | no "available to spend" |
+| `balances.limit` | **null, all 3 cards** | **no credit utilization** |
+| `aprs` | **empty array, all 3 cards** | no interest modelling |
+| `last_updated_datetime` | null | balance freshness unknowable |
+
+`/liabilities/get` is otherwise healthy on all three cards: `is_overdue`,
+`last_payment_date`, `last_payment_amount`, `last_statement_issue_date`,
+`last_statement_balance`, `minimum_payment_amount` and `next_payment_due_date`
+are all populated. So statement and payment tracking is fine; utilization and
+APR modelling are not.
+
+Whether adding `balance` to the initial products changes any of this is
+**untested**. It looks unlikely — the endpoint already works without it, so the
+nulls read as Capital One not supplying the data rather than a permissions
+gate — but a re-link is the free moment to find out.
 
 **Whether Capital One can actually serve more than ~90 days is still
 undetermined.** Two hypotheses fit the 86 days equally well: our link-time
