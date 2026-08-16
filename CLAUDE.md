@@ -31,8 +31,17 @@ Also exercised: the Item-selection fail-closed path (2 Items linked, no
 `/transactions/sync` (second run returns 0 added, correctly), and `PlaidError`
 surfacing a real `ITEM_LOGIN_REQUIRED` 400.
 
-One Item is currently linked: First Platypus Bank with
-`transactions,auth,identity,investments,liabilities`.
+Two Items are currently linked: First Platypus Bank
+(`transactions,auth,identity,investments,liabilities`, 12 accounts) and Tartan
+Bank (`auth,transactions`, 1 account) — the latter imported from a token the
+user created outside this repo.
+
+**An `access_token` is scoped to the `client_id`, not to the process or
+machine.** A token minted in the Plaid dashboard or the Quickstart works here
+unchanged; `import-token` adopts one by reading `item_id`, institution and
+products off `/item/get`. Verified 2026-08-15. The converse — that another
+developer's `client_id` cannot use your token — is documented but untested, and
+testing it needs a second Plaid account.
 
 **Bug found and fixed on the first live pass:** `/investments/transactions/get`
 was silently truncating at 100 rows of 1170. See the pagination note below.
@@ -93,6 +102,11 @@ was silently truncating at 100 rows of 1170. See the pagination note below.
   2019-2020, and investment transactions repeat on a ~10-day cycle. Don't read
   a stale date as a bug, and don't build date logic that assumes the fixtures
   move.
+- **Account count reveals how an Item was made.**
+  `/sandbox/public_token/create` always returns the institution's full fixture
+  — 12 accounts on `ins_109508` and `ins_109509`. The user's dashboard-created
+  Tartan Item has 1. A one-account Sandbox Item came through real Link with
+  account selection, not through the sandbox endpoint.
 - Sandbox data may not be ready immediately after linking — a fresh Item can
   return `PRODUCT_NOT_READY` on the first transactions call. Not seen in
   practice yet (2026-08-15: 48 transactions came back on the first sync,

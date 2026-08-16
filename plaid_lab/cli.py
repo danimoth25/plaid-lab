@@ -150,6 +150,53 @@ def cmd_link(ctx: Context) -> int:
     return 0
 
 
+def cmd_import_token(ctx: Context) -> int:
+    """Adopt an access_token created elsewhere into the local store.
+
+    Tokens made through the dashboard, the Quickstart, or another machine are
+    perfectly usable here -- an access_token is scoped to the client_id that
+    created it, not to the process. Everything the store needs beyond the token
+    itself (item_id, institution, products) is readable from /item/get, so the
+    only required argument is the token.
+    """
+    token = ctx.args.token
+    body = products.item_get(ctx.client, token).get("item") or {}
+    institution_id = body.get("institution_id")
+
+    name = body.get("institution_name")
+    if not name and institution_id:
+        try:
+            detail = products.institutions_get_by_id(ctx.client, institution_id)
+            name = (detail.get("institution") or {}).get("name")
+        except PlaidError:
+            pass
+
+    existing = next(
+        (i for i in ctx.store.items if i.item_id == body.get("item_id")), None
+    )
+    item = ctx.store.add(
+        Item(
+            item_id=body["item_id"],
+            access_token=token,
+            environment=ctx.settings.env,
+            institution_id=institution_id,
+            institution_name=name,
+            products=list(body.get("products") or []),
+            # Re-importing the same Item must not silently replay its whole
+            # transaction history, so an existing cursor survives the update.
+            cursor=existing.cursor if existing else None,
+        )
+    )
+    verb = "updated" if existing else "imported"
+    print(f"{verb} {item.label()}")
+    print(f"  products     {', '.join(item.products) or '(none)'}")
+    error = body.get("error")
+    if error:
+        print(f"  error        {error.get('error_code')}")
+    print(f"  stored in    {ctx.store.path}")
+    return 0
+
+
 def cmd_link_token(ctx: Context) -> int:
     """Create a link_token for the real Link UI (the Production path)."""
     data = products.link_token_create(
@@ -614,6 +661,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--webhook",
         help="webhook URL; must be set at creation for fire-webhook to work",
     )
+
+    import_token = add(
+        "import-token",
+        cmd_import_token,
+        "Adopt an access_token created elsewhere into the local store.",
+    )
+    import_token.add_argument("token", help="an access_token")
 
     link_token = add(
         "link-token", cmd_link_token, "Create a link_token for the real Link UI."

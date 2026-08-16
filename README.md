@@ -45,6 +45,18 @@ real ~10,000-institution catalog, not these; the test banks have to be named.
 `--webhook <url>` attaches a webhook URL, which has to be set at creation for
 `fire-webhook` to work later.
 
+A token created somewhere else — the Plaid dashboard, the Quickstart, another
+machine — works here as long as it was created under the same `client_id`. Add
+it to the store with:
+
+```powershell
+.venv\Scripts\python.exe -m plaid_lab import-token access-sandbox-<uuid>
+```
+
+`import-token` reads `item_id`, institution and products off `/item/get`, so
+the token is the only argument. Re-importing an Item preserves its stored
+transactions cursor.
+
 ## Commands
 
 | Command | Endpoint | Notes |
@@ -52,6 +64,7 @@ real ~10,000-institution catalog, not these; the test banks have to be named.
 | `env` | `/institutions/get` | config check + auth probe |
 | `institutions` | `/institutions/get` | `--count`, `--country` |
 | `link` | `/sandbox/public_token/create` + `/item/public_token/exchange` | Sandbox only; `--institution`, `--products`, `--webhook` |
+| `import-token` | `/item/get` | adopt an `access_token` made elsewhere |
 | `link-token` | `/link/token/create` | the Production path, for the real Link UI |
 | `items` | (local) | what is in `items.json` |
 | `item` | `/item/get` | products, webhook, pending error |
