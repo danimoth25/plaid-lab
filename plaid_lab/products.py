@@ -13,6 +13,9 @@ from typing import Any, Iterable
 
 from plaid.api.plaid_api import PlaidApi
 from plaid.model.accounts_balance_get_request import AccountsBalanceGetRequest
+from plaid.model.accounts_balance_get_request_options import (
+    AccountsBalanceGetRequestOptions,
+)
 from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.auth_get_request import AuthGetRequest
 from plaid.model.country_code import CountryCode
@@ -35,6 +38,7 @@ from plaid.model.liabilities_get_request import LiabilitiesGetRequest
 from plaid.model.link_token_create_hosted_link import LinkTokenCreateHostedLink
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
+from plaid.model.link_token_create_request_update import LinkTokenCreateRequestUpdate
 from plaid.model.link_token_get_request import LinkTokenGetRequest
 from plaid.model.products import Products
 from plaid.model.sandbox_item_fire_webhook_request import (
@@ -115,6 +119,8 @@ def link_token_create(
     webhook: str | None = None,
     hosted: bool = False,
     url_lifetime_seconds: int | None = None,
+    access_token: str | None = None,
+    account_selection_enabled: bool = False,
 ) -> dict[str, Any]:
     """Create a link_token, the input to one Link session.
 
@@ -124,14 +130,29 @@ def link_token_create(
     With `hosted=True` the response also carries `hosted_link_url`: Plaid hosts
     the Link page itself, so no frontend is needed to reach an access_token.
     That makes this the practical Production path for a single-user app.
+
+    Passing `access_token` switches this into **update mode**: the session
+    re-authenticates an Item that already exists instead of creating one. The
+    existing `access_token` keeps working afterwards -- update mode issues no
+    new token, which is the whole point. This is how an Item recovers from
+    `ITEM_LOGIN_REQUIRED` and from a consent expiry (Capital One's is annual).
+
+    `products` must be omitted in update mode; Plaid rejects a request carrying
+    both, since the Item's products are already fixed.
     """
     kwargs: dict[str, Any] = dict(
         client_name=client_name,
         language=language,
         country_codes=_countries(country_codes),
         user=LinkTokenCreateRequestUser(client_user_id=client_user_id),
-        products=_products(products),
     )
+    if access_token:
+        kwargs["access_token"] = access_token
+        kwargs["update"] = LinkTokenCreateRequestUpdate(
+            account_selection_enabled=account_selection_enabled
+        )
+    else:
+        kwargs["products"] = _products(products)
     if webhook:
         kwargs["webhook"] = webhook
     if hosted:
@@ -184,12 +205,27 @@ def accounts_get(client: PlaidApi, access_token: str) -> dict[str, Any]:
     return call(client.accounts_get, AccountsGetRequest(access_token=access_token))
 
 
-def accounts_balance_get(client: PlaidApi, access_token: str) -> dict[str, Any]:
-    """Like accounts_get, but forces a fresh balance pull from the institution."""
-    return call(
-        client.accounts_balance_get,
-        AccountsBalanceGetRequest(access_token=access_token),
-    )
+def accounts_balance_get(
+    client: PlaidApi,
+    access_token: str,
+    max_age_hours: float | None = None,
+) -> dict[str, Any]:
+    """Like accounts_get, but forces a fresh balance pull from the institution.
+
+    `max_age_hours` becomes `options.min_last_updated_datetime` -- "the balance
+    must be at least this fresh, refetch if it is not". **Capital One requires
+    it for non-depository accounts** and errors without it, so any credit card
+    balance needs this set. Harmless elsewhere.
+
+    The value is sent as an aware UTC datetime; Plaid rejects a naive one.
+    """
+    kwargs: dict[str, Any] = {"access_token": access_token}
+    if max_age_hours is not None:
+        kwargs["options"] = AccountsBalanceGetRequestOptions(
+            min_last_updated_datetime=dt.datetime.now(dt.timezone.utc)
+            - dt.timedelta(hours=max_age_hours)
+        )
+    return call(client.accounts_balance_get, AccountsBalanceGetRequest(**kwargs))
 
 
 def auth_get(client: PlaidApi, access_token: str) -> dict[str, Any]:

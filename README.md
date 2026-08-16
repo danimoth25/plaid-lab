@@ -134,7 +134,8 @@ your code.
 | `items` | (local) | what is in `items.json` |
 | `item` | `/item/get` | products, webhook, pending error |
 | `accounts` | `/accounts/get` | cached balances |
-| `balances` | `/accounts/balance/get` | forces a live pull |
+| `balances` | `/accounts/balance/get` | forces a live pull; `--max-age` hours |
+| `relink` | `/link/token/create` in update mode | re-auth an existing Item |
 | `auth` | `/auth/get` | ACH routing + account numbers |
 | `identity` | `/identity/get` | holder name, email, phone, address |
 | `transactions` | `/transactions/sync` | incremental; `--reset`, `--limit` |
@@ -168,6 +169,14 @@ Two flags apply broadly:
 - **An empty first sync means "not ready", not "no transactions."** Plaid
   fetches in two phases and returns an empty delta while the historical pull is
   in flight. Sync again before concluding an account is empty.
+- **`balances --max-age` is required at some banks.** It becomes
+  `min_last_updated_datetime`. Capital One rejects `/accounts/balance/get` for
+  non-depository accounts without it, so credit card balances need it. Defaults
+  to 6 hours; `--max-age 0` omits it.
+- **`relink` recovers a broken Item** — `ITEM_LOGIN_REQUIRED`, or an expired
+  consent. It uses Link update mode, which issues **no new access_token**: the
+  existing one resumes working and the stored cursor and history are untouched.
+  Nothing to claim afterwards.
 - **`/investments/transactions/get` has no `has_more` flag** and caps a page at
   500. It reports the real count in `total_investment_transactions`, and a
   caller that ignores it gets a truncated list with no error. Both paginated

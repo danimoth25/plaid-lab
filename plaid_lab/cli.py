@@ -433,6 +433,65 @@ def cmd_hosted_link(ctx: Context) -> int:
         time.sleep(ctx.args.poll)
 
 
+def cmd_relink(ctx: Context) -> int:
+    """Re-authenticate an existing Item through Link update mode.
+
+    This is the recovery path for `ITEM_LOGIN_REQUIRED` and for a lapsed
+    consent -- Capital One's expires annually, so this will be needed on a
+    schedule rather than only after a failure.
+
+    Update mode issues **no new access_token**: the existing one resumes
+    working, so there is nothing to claim afterwards. That also means the
+    stored cursor and history stay intact.
+    """
+    item = ctx.item()
+    data = products.link_token_create(
+        ctx.client,
+        client_user_id=ctx.args.user,
+        access_token=item.access_token,
+        account_selection_enabled=ctx.args.select_accounts,
+        hosted=True,
+        url_lifetime_seconds=ctx.args.lifetime,
+    )
+    if ctx.args.json:
+        print(dumps(data))
+        return 0
+
+    link_token = data["link_token"]
+    before = products.item_get(ctx.client, item.access_token).get("item") or {}
+    error = (before.get("error") or {}).get("error_code")
+    print(f"re-authenticating {item.label()}")
+    print(f"  current error  {error or 'none'}")
+    print(f"\nopen this in a browser:\n\n  {data.get('hosted_link_url')}\n")
+    print(f"link_token   {link_token}")
+    print(f"expiration   {data.get('expiration')}")
+    if ctx.settings.is_sandbox:
+        print("credentials  user_good / pass_good")
+    print("\nThe existing access_token keeps working; nothing to claim after.")
+
+    if not ctx.args.wait:
+        print(f"\nverify with:\n  python -m plaid_lab item --item {item.item_id[:8]}")
+        return 0
+
+    print(f"\npolling until the Item error clears (timeout {ctx.args.timeout}s)...")
+    deadline = time.monotonic() + ctx.args.timeout
+    while True:
+        body = products.item_get(ctx.client, item.access_token).get("item") or {}
+        now_error = (body.get("error") or {}).get("error_code")
+        if not now_error:
+            print(f"\n{item.label()} is healthy again")
+            return 0
+        if time.monotonic() >= deadline:
+            print(
+                f"\ntimed out with error still {now_error}. The link_token is "
+                f"valid until {data.get('expiration')}; finish in the browser "
+                f"and re-check with `item`.",
+                file=sys.stderr,
+            )
+            return 1
+        time.sleep(ctx.args.poll)
+
+
 def cmd_claim(ctx: Context) -> int:
     """Exchange the public_token(s) from a completed Link session."""
     claimed = _claim(ctx, ctx.args.link_token)
@@ -542,10 +601,13 @@ def cmd_accounts(ctx: Context) -> int:
 def cmd_balances(ctx: Context) -> int:
     """Same as accounts, but forces a live balance refresh at the institution."""
     item = ctx.item()
-    data = products.accounts_balance_get(ctx.client, item.access_token)
+    data = products.accounts_balance_get(
+        ctx.client, item.access_token, max_age_hours=ctx.args.max_age
+    )
 
     def render() -> None:
-        print(fmt.heading(f"{item.label()} (live refresh)"))
+        age = f", max age {ctx.args.max_age}h" if ctx.args.max_age else ""
+        print(fmt.heading(f"{item.label()} (live refresh{age})"))
         print(fmt.table(_account_rows(data.get("accounts") or []), ACCOUNT_HEADERS))
 
     ctx.emit(data, render)
@@ -970,10 +1032,41 @@ def build_parser() -> argparse.ArgumentParser:
     )
     claim.add_argument("link_token")
 
+    relink = add(
+        "relink",
+        cmd_relink,
+        "Re-authenticate an existing Item (Link update mode).",
+        item=True,
+    )
+    relink.add_argument("--user", default="plaid-lab-user")
+    relink.add_argument(
+        "--select-accounts",
+        action="store_true",
+        help="let the user change which accounts are shared",
+    )
+    relink.add_argument("--lifetime", type=int)
+    relink.add_argument(
+        "--wait", action="store_true", help="poll until the Item error clears"
+    )
+    relink.add_argument("--timeout", type=int, default=300)
+    relink.add_argument("--poll", type=int, default=3)
+
     add("items", cmd_items, "List locally stored Items.")
     add("item", cmd_item, "Item status, products and pending errors.", item=True)
     add("accounts", cmd_accounts, "Accounts with cached balances.", item=True)
-    add("balances", cmd_balances, "Accounts with a live balance refresh.", item=True)
+    balances = add(
+        "balances", cmd_balances, "Accounts with a live balance refresh.", item=True
+    )
+    balances.add_argument(
+        "--max-age",
+        type=float,
+        default=6.0,
+        help=(
+            "maximum balance staleness in hours; sent as "
+            "min_last_updated_datetime. Capital One REQUIRES this for "
+            "non-depository accounts. 0 to omit"
+        ),
+    )
     add("auth", cmd_auth, "ACH account and routing numbers.", item=True)
     add("identity", cmd_identity, "Account holder name, email, phone, address.", item=True)
 

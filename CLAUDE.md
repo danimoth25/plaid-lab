@@ -212,19 +212,27 @@ Company Information, MSA, Security Questionnaire).
 What Capital One *does* impose is operational, and each item below is a real
 constraint on this code:
 
-- **Consent refresh every 12 months.** The Item will break annually and needs
-  Link **update mode** to recover. That path does not exist here yet and is the
-  single most important gap before Production. `LinkTokenCreateRequestUpdate`
-  (`account_selection_enabled`, `item_ids`, `reauthorization_enabled`, `user`)
-  is the field to pass to `/link/token/create`. Design for it, not around it.
+- **Consent refresh every 12 months.** The Item breaks annually and needs Link
+  **update mode** to recover. Wired 2026-08-15 as `relink`, which combines
+  update mode with Hosted Link so no frontend is involved. Key properties:
+  - Passing `access_token` to `/link/token/create` is what selects update mode.
+    **`products` must be omitted** — Plaid rejects a request carrying both,
+    since the Item's products are already fixed.
+  - **Update mode issues no new `access_token`.** The existing one resumes
+    working, so there is nothing to claim afterwards and the stored cursor and
+    history survive. Do not add an exchange step to this path.
+  - `--wait` polls `/item/get` until `error` clears, since there is no token
+    handoff to poll for.
 - **No pending transaction data at all.** The pending -> posted transition that
   normally requires de-duplication via `pending_transaction_id` simply does not
   occur here. Transactions appear only once posted, so they land later than a
   Capital One user expects from the app UI.
 - **`/accounts/balance/get` needs a freshness spec for non-depository
-  accounts.** `AccountsBalanceGetRequestOptions.min_last_updated_datetime`
-  exists and is unwired in `products.accounts_balance_get`. The `balances`
-  command will fail on credit cards until it is passed.
+  accounts.** Wired 2026-08-15 as `balances --max-age <hours>`, defaulting to
+  6, which becomes `options.min_last_updated_datetime`. Send it as an *aware*
+  UTC datetime; Plaid rejects a naive one. Accepted in Sandbox, but Sandbox
+  does not enforce the requirement, so the Capital One behaviour is still
+  untested.
 - **`/transactions/refresh` errors on credit-card-only Items**, and **Identity
   is unsupported** on them.
 - **Past-due credit cards cannot be linked at all.**
