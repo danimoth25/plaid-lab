@@ -1,7 +1,31 @@
 # plaid-lab
 
 A Python client and CLI over the [Plaid API](https://plaid.com/docs/), aimed at
-personal finance tooling. Currently pointed at the Sandbox.
+personal finance tooling.
+
+## What this is
+
+A personal finance application built and run by one individual developer, for
+their own bank and brokerage accounts. It is not a commercial product, has no
+customers, and is not distributed — the author is the only user and the only
+account holder whose data it touches.
+
+**Scope is read-only.** It reads balances, transactions, investment holdings
+and liability terms in order to categorize spending and track net worth across
+accounts. It initiates no payments, transfers, or money movement of any kind,
+and wraps none of Plaid's payment products.
+
+**Data handling.** It runs locally, not as a hosted service. API credentials
+live in environment variables and Plaid access tokens in a local file; both are
+excluded from version control. No financial data is transmitted anywhere other
+than between this machine and Plaid's API — there is no server, no database,
+and no third party in the path.
+
+**Products used:** Transactions, Auth, Identity, Investments, Liabilities,
+Balance. Linking goes through Plaid Link (Hosted Link), so bank credentials are
+entered into Plaid and are never seen by this application.
+
+Currently pointed at the Sandbox environment.
 
 ## Setup
 
