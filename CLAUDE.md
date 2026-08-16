@@ -176,6 +176,53 @@ was silently truncating at 100 rows of 1170. See the pagination note below.
 - Match the surrounding style: module docstrings explain the protocol and the
   reason for a design choice, not just the mechanics.
 
+## Production, and Capital One specifically (2026-08-15)
+
+The user's primary bank is **Capital One (`ins_128026`, `oauth: true`)**, so its
+constraints drive the design. A Production application is in progress; the
+project URL given on the form is <https://github.com/danimoth25/plaid-lab>.
+
+**Capital One is not an approval gate.** Plaid's OAuth guide lists per-bank
+extra requirements, and Capital One is not among the banks needing anything
+beyond the standard registration. Chase and PNC require the Security
+Questionnaire (waived on Trial); Schwab can take six weeks. Capital One
+requires none of that, and Plaid states most institutions open within hours of
+the Dashboard registration being complete (Application Display Information,
+Company Information, MSA, Security Questionnaire).
+
+What Capital One *does* impose is operational, and each item below is a real
+constraint on this code:
+
+- **Consent refresh every 12 months.** The Item will break annually and needs
+  Link **update mode** to recover. That path does not exist here yet and is the
+  single most important gap before Production. `LinkTokenCreateRequestUpdate`
+  (`account_selection_enabled`, `item_ids`, `reauthorization_enabled`, `user`)
+  is the field to pass to `/link/token/create`. Design for it, not around it.
+- **No pending transaction data at all.** The pending -> posted transition that
+  normally requires de-duplication via `pending_transaction_id` simply does not
+  occur here. Transactions appear only once posted, so they land later than a
+  Capital One user expects from the app UI.
+- **`/accounts/balance/get` needs a freshness spec for non-depository
+  accounts.** `AccountsBalanceGetRequestOptions.min_last_updated_datetime`
+  exists and is unwired in `products.accounts_balance_get`. The `balances`
+  command will fail on credit cards until it is passed.
+- **`/transactions/refresh` errors on credit-card-only Items**, and **Identity
+  is unsupported** on them.
+- **Past-due credit cards cannot be linked at all.**
+- **A company name change** requires notifying the Plaid account manager, and
+  Items enter `ITEM_LOGIN_REQUIRED` afterwards.
+
+Other banks worth knowing before wiring more Items: American Express, Citibank,
+Fidelity, Navy Federal, PNC and TD all refresh consent annually; USAA every 18
+months; Brex every 3. Bank of America is migrating APIs through 2026 — listen
+for `PENDING_DISCONNECT`. Robinhood cannot add products after Item creation
+unless they were consented up front via `additional_consented_products`, which
+is also unwired here.
+
+The general lesson: **annual consent expiry is the norm, not the exception.**
+Any personal-finance app that intends to keep running needs update mode, and
+`consent_expiration_time` on `/item/get` is the field that tells it when.
+
 ## Posture
 
 Sandbox only, and read-mostly. The write-ish endpoints wrapped so far are
