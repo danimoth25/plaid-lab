@@ -48,6 +48,9 @@ from plaid.model.sandbox_public_token_create_request_options import (
     SandboxPublicTokenCreateRequestOptions,
 )
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
+from plaid.model.transactions_sync_request_options import (
+    TransactionsSyncRequestOptions,
+)
 from plaid.model.webhook_type import WebhookType
 
 from .client import call
@@ -202,17 +205,27 @@ def identity_get(client: PlaidApi, access_token: str) -> dict[str, Any]:
 # --- transactions ----------------------------------------------------------
 
 
+MAX_DAYS_REQUESTED = 730
+
+
 def transactions_sync(
     client: PlaidApi,
     access_token: str,
     cursor: str | None = None,
     count: int = 100,
+    days_requested: int | None = MAX_DAYS_REQUESTED,
 ) -> dict[str, Any]:
     """Pull every page of /transactions/sync from `cursor` forward.
 
     /transactions/sync is the current endpoint -- /transactions/get is legacy and
     its date-window pagination has to be re-walked when anything changes.
     Sync returns added/modified/removed deltas plus a `next_cursor` to persist.
+
+    **`days_requested` only takes effect when transactions are initialized for
+    the first time**, and it cannot be widened afterwards -- an Item first
+    synced under the 90-day default is capped at 90 days for its whole life, and
+    the only remedy is re-linking. So it defaults to the 730-day maximum here
+    rather than to Plaid's default. The institution may return less.
 
     Returns one merged page-set: `added`, `modified`, `removed`, `next_cursor`.
     """
@@ -226,6 +239,10 @@ def transactions_sync(
         kwargs: dict[str, Any] = {"access_token": access_token, "count": count}
         if cursor:
             kwargs["cursor"] = cursor
+        if days_requested:
+            kwargs["options"] = TransactionsSyncRequestOptions(
+                days_requested=days_requested
+            )
         page = call(client.transactions_sync, TransactionsSyncRequest(**kwargs))
         pages += 1
         added.extend(page.get("added") or [])

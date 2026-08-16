@@ -16,6 +16,8 @@ import sys
 import time
 from typing import Any, Callable
 
+import plaid
+
 from . import fmt, products
 from .client import PlaidError, dumps, make_client
 from .config import ConfigError, Settings, load_settings
@@ -490,7 +492,12 @@ def cmd_transactions(ctx: Context) -> int:
     """
     item = ctx.item()
     cursor = None if ctx.args.reset else item.cursor
-    data = products.transactions_sync(ctx.client, item.access_token, cursor=cursor)
+    data = products.transactions_sync(
+        ctx.client,
+        item.access_token,
+        cursor=cursor,
+        days_requested=ctx.args.days_requested,
+    )
     ctx.store.update(item, cursor=data["next_cursor"])
 
     def render() -> None:
@@ -736,8 +743,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    # Repeated on every subcommand as well as globally, so both
+    # `--json transactions` and `transactions --json` work. argparse otherwise
+    # accepts the global flag only before the subcommand name.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
+
     def add(name: str, func, help_text: str, item: bool = False):
-        sub = subparsers.add_parser(name, help=help_text, description=help_text)
+        sub = subparsers.add_parser(
+            name, help=help_text, description=help_text, parents=[common]
+        )
         sub.set_defaults(func=func)
         if item:
             sub.add_argument("--item", help="index, item_id prefix, or institution")
@@ -819,6 +834,15 @@ def build_parser() -> argparse.ArgumentParser:
     transactions.add_argument(
         "--limit", type=int, default=25, help="rows to display; 0 for all"
     )
+    transactions.add_argument(
+        "--days-requested",
+        type=int,
+        default=products.MAX_DAYS_REQUESTED,
+        help=(
+            "history to request, 1-730. Only applies on an Item's FIRST sync "
+            "and cannot be widened later without re-linking"
+        ),
+    )
 
     add("investments", cmd_investments, "Investment holdings.", item=True)
 
@@ -862,6 +886,11 @@ def main(argv: list[str] | None = None) -> int:
     except (ConfigError, StoreError) as exc:
         print(f"\n{exc}", file=sys.stderr)
         return 1
+    except plaid.ApiValueError as exc:
+        # Raised while BUILDING a request, before any call, so it never reaches
+        # client.call() and would otherwise surface as a raw traceback.
+        print(f"\nInvalid argument: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

@@ -252,6 +252,40 @@ it being on-demand:
   sitting there, re-login is free. Do not argue for routing Schwab through
   Plaid on maintenance grounds.
 
+## History: `days_requested`, and the one-shot you cannot redo
+
+**The user wants data from 2026-01-01 onward and nothing earlier** (their
+current budget regimen starts there). That is ~227 days back as of
+2026-08-15 — which is *more than Plaid's 90-day default* and far less than its
+730-day maximum.
+
+- **`days_requested` applies only when an Item's transactions are initialized
+  for the first time, and cannot be widened afterwards.** An Item first synced
+  under the default is capped at 90 days for its entire life; the only remedy
+  is re-linking. `products.transactions_sync` therefore defaults to
+  `MAX_DAYS_REQUESTED = 730` rather than to Plaid's default. Do not "fix" that
+  down to 90.
+- Range is 1-730, enforced client-side by the library. Production applies a
+  30-day floor.
+- **The Sandbox cannot validate lookback.** With 730 requested, `ins_109508`
+  returned 48 transactions spanning 81 days (2026-05-23 to 2026-08-12). That is
+  the fixture's size, not a limit — it says nothing about what Capital One will
+  return. Treat real lookback as unknown until a Production Item exists.
+- **Consequence for the CSV plan:** if Capital One honors ~227 days, Plaid
+  alone covers 2026-01-01 forward and the historical CSV import is unnecessary.
+  Keep it as a fallback, but check the oldest returned transaction on the first
+  real sync before doing any CSV work. The clean start date is then a filter in
+  the local store, not a data-sourcing problem.
+
+**An empty first sync means "not ready", not "no transactions."** A freshly
+linked `ins_109510` Item returned `added 0` on its first sync and 48 on the
+next, seconds later — Plaid fetches in two phases (initial update, then
+historical update) and sync returns an empty delta rather than
+`PRODUCT_NOT_READY` while that is in flight. Earlier Items returned data
+immediately, so this is timing-dependent and will not reproduce reliably. A
+dashboard that syncs right after linking and renders the result will show an
+empty account and look broken. Re-sync before concluding an Item has no data.
+
 ## The storage decision, which the sync model forces
 
 **`/transactions/sync` is a change feed, and `cmd_transactions` currently

@@ -141,6 +141,13 @@ Two flags apply broadly:
 - **`/transactions/sync` is stateful.** It returns only what changed since the
   stored cursor, so a second run legitimately returns nothing. `--reset`
   replays from the beginning.
+- **`--days-requested` only applies on an Item's first sync**, and cannot be
+  widened later without re-linking. It defaults to the 730-day maximum here
+  rather than Plaid's 90-day default, because getting it wrong is not
+  recoverable. The institution may return less than requested.
+- **An empty first sync means "not ready", not "no transactions."** Plaid
+  fetches in two phases and returns an empty delta while the historical pull is
+  in flight. Sync again before concluding an account is empty.
 - **`/investments/transactions/get` has no `has_more` flag** and caps a page at
   500. It reports the real count in `total_investment_transactions`, and a
   caller that ignores it gets a truncated list with no error. Both paginated
